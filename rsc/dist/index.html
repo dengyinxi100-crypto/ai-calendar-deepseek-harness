@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- 必须放在所有资源引用之前。
+         vite.config.ts 用 base:'./' 生成相对路径（这样部署在子目录也能跑），
+         但相对路径 + SPA 回退会互相打架：访问 /some/deep/link 时服务端回退返回本文件，
+         浏览器会去 /some/deep/assets/xxx.js 找资源，直接白屏。
+         加上 base 标签 后，相对路径统一从站点根解析，两种场景都成立。
+         若部署在子目录（如 GitHub Pages 的 /repo/），把 href 改成 "/repo/"。 -->
+    
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+    <title>AI 智能日历</title>
+    <!-- 用绝对路径引用 favicon：Vite 不会把它当构建资源处理，
+         因此 public/logo.png 会原样出现在 dist 根目录，不额外产生一份带 hash 的副本。
+         注意别加 sizes="any" —— 那会让 Vite 开始处理这个链接并复制一份 1MB 的图片。 -->
+    <link rel="icon" type="image/png" href="./logo.png" />
+    <script type="module" crossorigin src="./assets/index-iltakQaF.js"></script>
+    <link rel="modulepreload" crossorigin href="./assets/react-BEryHLmj.js">
+    <link rel="modulepreload" crossorigin href="./assets/motion-CDgv9RYN.js">
+    <link rel="stylesheet" crossorigin href="./assets/index-D_v93vhO.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>

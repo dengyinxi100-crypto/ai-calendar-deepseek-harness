@@ -1,0 +1,18 @@
+# ============================================================================
+# dsh-ai-calendar —— DSH bundle patch
+# ============================================================================
+# 把「AI 智能日历」插件挂进 DSH profile 的配置树。
+# 这个文件由插件的 package.json（dsh.bundle.patch）引用，
+# 安装插件后 DSH 会自动把它并入 profile 配置，无需手改 cordis.patch.yml。
+#
+# 安装方式见 README：
+#   在 DSH「插件」页安装 dsh-ai-calendar，或
+#   pnpm add dsh-ai-calendar（在 profile 目录下），然后重启 DSH。
+#
+# 前端与后端资源默认取包内 rsc/ 目录；
+# 需要指向源码项目时设置环境变量 DSH_CALENDAR_ROOT 后重启 DSH。
+# ============================================================================
+
+- insert:
+    - id: dsh-ai-calendar
+      name: dsh-ai-calendar

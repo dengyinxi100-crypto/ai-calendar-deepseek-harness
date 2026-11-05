@@ -1,0 +1,2633 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AI 智能日历 — 一个人就是一支团队</title>
+<meta name="description" content="本地优先 · 多模型 AI · 开源免费的智能日历与任务系统" />
+<link rel="icon" type="image/png" href="/logo.png" />
+<script>
+/* 尽早给根元素打标：脚本接管前先把内容藏住。
+   否则元素会先以"可见"状态画一帧，再被 .rv 改成透明 ——
+   那次过渡是回不来的，首屏就等于没有入场动画。 */
+(function(){
+  var root = document.documentElement;
+  root.className += " js-anim";
+  /* 兜底：万一后面脚本异常，1.5s 后无条件显形，绝不留白屏 */
+  setTimeout(function(){ root.className += " rv-ready"; }, 1500);
+})();
+</script>
+
+<!-- ================================================================
+     AI 智能日历 · 介绍页
+     ── 每屏一页：.page 固定 100dvh + scroll-snap 吸附
+     ── 滚轮/键盘翻页由脚本接管；触摸与滚动条仍走原生吸附
+     ── 单页内容超出时由 .page__inner 内部滚动，不破坏整页吸附
+     ── 文案与模块的入场动画由脚本自动打标（无需手写标记）：
+        每次翻页停稳后按顺序浮现，整页离屏即复位，上滑下滑回看都会重播
+     ================================================================ -->
+<style>
+/* ================================================================
+   0. 分页骨架
+   ================================================================ */
+html{
+  scroll-snap-type:y mandatory;
+  overflow-y:scroll;
+}
+*,*::before,*::after{box-sizing:border-box}
+
+.page{
+  position:relative;
+  height:100vh;
+  height:100dvh;
+  scroll-snap-align:start;
+  scroll-snap-stop:always;
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+  overflow:hidden;
+}
+/* 内容超出时本页自己滚，滚动条极细且不抢戏 */
+.page__inner{
+  width:100%;
+  max-height:100%;
+  overflow-y:auto;
+  overscroll-behavior:contain;
+  padding:clamp(54px,7.6vh,88px) 0 clamp(22px,4.4vh,50px);
+  scrollbar-width:thin;
+  scrollbar-color:var(--border-strong) transparent;
+}
+.page__inner::-webkit-scrollbar{width:6px}
+.page__inner::-webkit-scrollbar-track{background:transparent}
+.page__inner::-webkit-scrollbar-thumb{background:var(--border-strong);border-radius:3px}
+
+/* 页码指示器 */
+.pager{
+  position:fixed;right:clamp(12px,2.2vw,26px);top:50%;transform:translateY(-50%);
+  z-index:55;display:flex;flex-direction:column;gap:10px;
+}
+.pager__dot{
+  width:8px;height:8px;padding:0;border:1px solid var(--border-strong);
+  border-radius:50%;background:transparent;cursor:pointer;
+  transition:background-color .25s,border-color .25s,transform .25s;
+}
+.pager__dot:hover{border-color:var(--lavender)}
+.pager__dot.is-active{background:var(--lavender);border-color:var(--lavender);transform:scale(1.25)}
+@media (max-width:820px){.pager{display:none}}
+
+/* 锚点别名（如 #features → #modules）：必须绝对定位钉在页首。
+   放流内会被 .page 的 flex 居中推到页首之下，浏览器自己的锚点滚动就会偏出吸附位。 */
+.anchor-alias{position:absolute;top:0;left:0;width:0;height:0;pointer-events:none}
+
+/* ================================================================
+   1. 令牌
+   ================================================================ */
+:root{
+  --ink:#121110;
+  --cream:#f4f2ec;
+  --lavender:#c29af6;
+  --lavender-deep:#8f7ae0;
+  --card:#1c1a19;
+  --muted:#2a2725;
+  --muted-fg:#a39e94;
+  --dim:#6b6862;
+  --faint:#8b887f;
+  --secondary:#251742;
+  --border:#f4f2ec24;
+  --border-strong:#f4f2ec40;
+
+  --sans:"Inter","suisse",system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  --mono:ui-monospace,"SFMono-Regular","Geist Mono",Menlo,Consolas,"Courier New",monospace;
+
+  --maxw:1200px;
+  --gutter:clamp(20px,5vw,64px);
+
+  --ease-out:cubic-bezier(.16,1,.3,1);
+  --ease-inout:cubic-bezier(.45,.05,.55,.95);
+  /* 入场专用：easeOutSine。--ease-out 前 1/5 时长就走完 ~85% 位移，
+     落位像"啪"一下；这条曲线全程匀速减速，才有"柔"的落位感。 */
+  --ease-soft:cubic-bezier(.39,.575,.565,1);
+  --z-full:300;
+
+  /* 受视口高度约束的排版尺度：矮屏自动收紧，保证一页装得下 */
+  --h1:clamp(2.05rem,min(8.4vw,10.5vh),6rem);
+  --h2:clamp(1.55rem,min(4.6vw,6.4vh),3.1rem);
+  --h3:clamp(1.15rem,min(2.6vw,4vh),1.9rem);
+
+  --dev-w:420px;
+  --dev-h:300px;
+  --dev-scale:1;
+  --dev-spin-duration:16s;
+  --dev-float-duration:6s;
+}
+
+body{
+  margin:0;
+  background:var(--ink);
+  color:var(--cream);
+  font-family:var(--sans);
+  font-size:16px;
+  line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+  overflow-x:hidden;
+}
+img{max-width:100%;display:block}
+a{color:inherit;text-decoration:none}
+code{font-family:var(--mono);font-size:.9em;color:var(--lavender)}
+::selection{background:var(--lavender);color:var(--ink)}
+
+body::before{
+  content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
+  background:
+    radial-gradient(900px 520px at 78% -8%,rgba(194,154,246,.10),transparent 62%),
+    radial-gradient(760px 480px at 8% 8%,rgba(139,211,255,.06),transparent 60%);
+}
+
+.wrap{max-width:var(--maxw);margin:0 auto;padding:0 var(--gutter);position:relative;z-index:1;width:100%}
+
+/* ── 通用排版 ── */
+.kicker{
+  font-family:var(--mono);font-size:11px;font-weight:400;
+  letter-spacing:.22em;text-transform:uppercase;color:var(--dim);
+}
+.display{
+  font-weight:700;line-height:.9;letter-spacing:-.04em;
+  margin:0;font-size:var(--h1);
+}
+.h2{
+  font-weight:700;line-height:1.02;letter-spacing:-.035em;margin:0;
+  font-size:var(--h2);
+}
+.lede{color:var(--muted-fg);font-size:clamp(.95rem,min(1.4vw,2.1vh),1.12rem);line-height:1.65}
+
+/* ── 蓝紫白流光：大标题与关键数字 ──
+   渐变以 50% 为一个周期，背景铺到 200% 时可视区正好露出完整一周；
+   背景位置由 0% 走到 100% 即滚过一个周期，且首尾同色 —— 循环无接缝、不跳帧。
+   只上标题与数字，正文保持纯色，避免影响可读性。 */
+@supports ((-webkit-background-clip:text) or (background-clip:text)){
+  .h2,.stat b{
+    background-image:linear-gradient(90deg,
+      #8bd3ff 0%,#c29af6 12.5%,#ffffff 25%,#c29af6 37.5%,#8bd3ff 50%,
+      #c29af6 62.5%,#ffffff 75%,#c29af6 87.5%,#8bd3ff 100%);
+    background-size:200% 100%;
+    background-repeat:repeat;
+    -webkit-background-clip:text;
+    background-clip:text;
+    color:transparent;
+    -webkit-text-fill-color:transparent;
+    animation:flowSweep 6.5s linear infinite;
+  }
+}
+@keyframes flowSweep{
+  from{background-position:0% 50%}
+  to{background-position:100% 50%}
+}
+
+/* 大标题是逐字 span：让父级做文字裁剪在 Chromium 下会把字叠成一团，
+   所以渐变直接落在每个字上，再用 --flow-x / --flow-w 把各自的取样点错开，
+   让整行拼回同一条连续光带（这两个值由脚本按实际排版量出）。 */
+@supports ((-webkit-background-clip:text) or (background-clip:text)){
+  .display .word-inner{
+    background-image:linear-gradient(90deg,
+      #8bd3ff 0%,#c29af6 12.5%,#ffffff 25%,#c29af6 37.5%,#8bd3ff 50%,
+      #c29af6 62.5%,#ffffff 75%,#c29af6 87.5%,#8bd3ff 100%);
+    background-size:calc(var(--flow-w,600px) * 2) 100%;
+    background-repeat:repeat;
+    -webkit-background-clip:text;
+    background-clip:text;
+    color:transparent;
+    -webkit-text-fill-color:transparent;
+    animation:flowWord 6.5s linear infinite;
+  }
+}
+@keyframes flowWord{
+  from{background-position:calc(0px - var(--flow-x,0px)) 50%}
+  to{background-position:calc(var(--flow-w,600px) - var(--flow-x,0px)) 50%}
+}
+
+.page-head{margin-bottom:clamp(16px,2.8vh,34px)}
+.page-head--row{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;flex-wrap:wrap}
+
+/* ── 逐字揭示 ── */
+.word-mask{display:inline-block;overflow:hidden;vertical-align:bottom}
+.word-inner{
+  display:inline-block;transform:translateY(115%);
+  transition:transform .7s var(--ease-soft);will-change:transform;
+}
+.is-revealed .word-inner{transform:translateY(0)}
+
+/* ── 出现动画：每次翻页（上滑 / 下滑）都会重播 ──
+   · .rise 只作脚本接管前的首帧守卫，避免首屏闪一下再隐藏
+   · .rv 由脚本自动挂到「文案」与「模块」上，--rv-delay 负责级联节奏
+   · 三档变体：文案上浮聚焦 / 模块上浮微缩 / 3D 装置只位移（不碰滤镜）
+   · 柔感来自三件事：慢一档的时长、匀速减速的 --ease-soft、更小的位移与缩放差 */
+
+/* 脚本打标前整页先藏着（js-anim 由 <head> 里的内联脚本打上），
+   打标完成（rv-ready）立刻放出来 —— 此时各单元已是透明起始态，过渡才有起点。 */
+.js-anim .page__inner{visibility:hidden}
+.js-anim.rv-ready .page__inner{visibility:visible}
+/* 打标阶段临时关掉过渡：把"透明 + 上浮"的起始态直接钉死，而不是从可见态渐变过去 */
+.anim-init .rv{transition:none !important}
+
+.rise{opacity:0}
+.rise.is-revealed{opacity:1}
+
+.rv{
+  opacity:0;
+  transform:translate3d(var(--rv-x,0),var(--rv-y,24px),0) scale(var(--rv-s,1));
+  filter:blur(var(--rv-b,6px));
+  transition:
+    opacity var(--rv-dur,.7s) var(--ease-soft) var(--rv-delay,0ms),
+    transform var(--rv-dur,.7s) var(--ease-soft) var(--rv-delay,0ms),
+    filter var(--rv-dur,.7s) var(--ease-soft) var(--rv-delay,0ms);
+}
+.rv.is-revealed{opacity:1;transform:translate3d(0,0,0) scale(1);filter:blur(0)}
+
+.rv--text{--rv-y:14px;--rv-b:12px;--rv-dur:.6s}
+.rv--block{--rv-y:24px;--rv-s:.982;--rv-b:8px;--rv-dur:.68s}
+.rv--split{--rv-y:0px;--rv-b:0px;--rv-dur:.48s}
+.rv--soft{--rv-y:20px;--rv-s:.972;--rv-dur:.75s}
+.rv--soft,.rv--soft.is-revealed,.rv--split,.rv--split.is-revealed{filter:none}
+
+/* 复位要瞬时完成，否则回看时会看到动画倒放 */
+.page.is-resetting .rv,
+.page.is-resetting .word-inner{transition:none !important}
+
+/* ================================================================
+   2. 导航
+   ================================================================ */
+.nav{
+  position:fixed;top:0;left:0;right:0;z-index:60;height:56px;
+  transition:background-color .35s ease,border-color .35s ease;
+  border-bottom:1px solid transparent;
+}
+.nav.is-stuck{
+  background:rgba(18,17,16,.82);
+  backdrop-filter:blur(18px) saturate(160%);
+  -webkit-backdrop-filter:blur(18px) saturate(160%);
+  border-bottom-color:var(--border);
+}
+.nav-inner{
+  max-width:var(--maxw);margin:0 auto;padding:0 var(--gutter);height:56px;
+  display:flex;align-items:center;gap:18px;
+}
+.brand{display:flex;align-items:center;gap:10px;font-weight:700;letter-spacing:-.02em;font-size:15px}
+.brand-mark{width:26px;height:26px;flex:none;border-radius:7px;background:linear-gradient(140deg,var(--lavender),#8bd3ff)}
+.nav-meta{font-family:var(--mono);font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--dim);margin-left:auto}
+.nav-links{display:flex;align-items:center;gap:22px}
+.nav-link{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted-fg);transition:color .2s;cursor:pointer}
+.nav-link:hover,.nav-link.is-active{color:var(--lavender)}
+
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:9px;
+  height:clamp(40px,5.4vh,46px);padding:0 24px;
+  font-family:var(--mono);font-size:12px;letter-spacing:.1em;text-transform:uppercase;
+  border:2px solid var(--lavender);border-radius:0;cursor:pointer;
+  background:transparent;color:var(--lavender);
+  transition:background-color .22s ease,color .22s ease,border-color .22s ease,transform .12s ease;
+}
+.btn:hover{background:var(--lavender);color:var(--ink)}
+.btn:active{transform:translateY(1px)}
+/* 次要按钮（GitHub 等外链）：比主按钮弱一档，不抢主 CTA */
+.btn--ghost{border-color:var(--border-strong);color:var(--muted-fg)}
+.btn--ghost:hover{background:transparent;border-color:var(--lavender);color:var(--lavender)}
+/* 获取方式页的动作按钮组 */
+.get-actions{display:flex;flex-wrap:wrap;gap:12px;margin-top:clamp(14px,2.6vh,26px)}
+
+/* ================================================================
+   3. Hero
+   ================================================================ */
+.hero-grid{
+  display:grid;grid-template-columns:minmax(0,1fr) auto;
+  gap:clamp(28px,4.5vw,64px);align-items:center;
+}
+.hero-kicker{display:flex;align-items:center;gap:12px;margin-bottom:clamp(12px,2.4vh,22px)}
+.hero-kicker::before{content:"";width:26px;height:1px;background:var(--lavender)}
+.hero-sub{margin:clamp(14px,2.6vh,24px) 0 0;max-width:44ch}
+.hero-meta{
+  display:flex;flex-wrap:wrap;gap:8px 22px;margin-top:clamp(16px,3vh,30px);
+  font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);
+}
+.hero-meta b{color:var(--muted-fg);font-weight:400}
+.hero-cta{display:flex;flex-wrap:wrap;gap:12px;margin-top:clamp(20px,3.6vh,38px)}
+
+.stats{
+  display:grid;grid-template-columns:repeat(4,1fr);
+  margin-top:clamp(24px,5vh,54px);
+  border-top:1px solid var(--border);border-bottom:1px solid var(--border);
+}
+.stat{padding:clamp(12px,2.2vh,22px) 20px;border-right:1px solid var(--border)}
+.stat:last-child{border-right:none}
+.stat b{display:block;font-size:clamp(1.4rem,min(3vw,4.2vh),2.4rem);font-weight:700;letter-spacing:-.03em;line-height:1;color:var(--lavender)}
+.stat span{display:block;margin-top:6px;font-family:var(--mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--dim)}
+
+/* ================================================================
+   4. 3D 双面应用窗口
+   ================================================================ */
+.device{
+  width:calc(var(--dev-w) * var(--dev-scale));
+  height:calc((var(--dev-h) + 40px) * var(--dev-scale));
+  justify-self:end;
+}
+.device__scale{width:var(--dev-w);height:calc(var(--dev-h) + 40px);transform:scale(var(--dev-scale));transform-origin:0 0}
+.device__scene{perspective:1200px;position:relative}
+.device__float{animation:dev-float var(--dev-float-duration) ease-in-out infinite}
+
+/* ── 装置倒影 ──
+   为什么不用 box-reflect：它复制的是"元素的绘制结果"，想给倒影单独加模糊/提亮是做不到的
+   （给元素加 filter 会把卡片本体一起糊掉）。
+   退而求其次用 backdrop-filter 提亮，又因为它提亮的是"背后的一切"（包括空背景），
+   整片区域会比周围亮，下沿就显出一个方框 —— 这正是之前那条"底部模块框"。
+   所以这里老老实实镜像一份：克隆卡片 → 竖直翻转 → 放进一个裁切窗口。
+   模糊、提亮、透明度全部只作用在倒影自己身上，背景一点不受影响，方框自然不存在。
+   结构：窗口(裁切+遮罩) > 翻转层(scaleY(-1) + 虚化提亮) > 克隆卡片(同款旋转动画) */
+.device__reflect{
+  position:absolute;left:0;top:calc(var(--dev-h) + 4px);
+  width:var(--dev-w);height:var(--dev-reflect-len,110px);
+  overflow:hidden;pointer-events:none;
+  /* 和卡片同样的圆角，免得下沿切出一条直角边 */
+  border-radius:0 0 14px 14px;
+  -webkit-mask-image:radial-gradient(104% 100% at 50% 0%,#000 0%,rgba(0,0,0,.8) 36%,rgba(0,0,0,.34) 66%,transparent 94%);
+  mask-image:radial-gradient(104% 100% at 50% 0%,#000 0%,rgba(0,0,0,.8) 36%,rgba(0,0,0,.34) 66%,transparent 94%);
+  /* 跟着卡片一起浮动 */
+  animation:dev-float var(--dev-float-duration) ease-in-out infinite;
+}
+.device__reflect-flip{
+  position:absolute;left:0;bottom:100%;width:var(--dev-w);height:var(--dev-h);
+  transform:scaleY(-1);transform-origin:bottom center;
+  /* 这里刻意不给 perspective：本体卡片挂在 .device__float 下，而 .device__float 是 flat 的，
+     那张卡的 3D 旋转其实是在自己的扁平空间里投影的。克隆体只要照抄同一条件即可；
+     给它单独加透视反而会让投影对不上（实测宽 3~6px、横向最多 20px 的偏差）。 */
+  filter:blur(6px) brightness(1.85) saturate(128%);
+  opacity:.92;
+}
+.device__reflect-card{
+  width:var(--dev-w);height:var(--dev-h);position:relative;margin:0 auto;
+  transform-style:preserve-3d;
+  animation:dev-spin var(--dev-spin-duration) var(--ease-inout) infinite;
+}
+.device__card{
+  width:var(--dev-w);height:var(--dev-h);position:relative;margin:0 auto;
+  transform-style:preserve-3d;will-change:transform;
+  animation:dev-spin var(--dev-spin-duration) var(--ease-inout) infinite;
+}
+.device:hover .device__card,.device:hover .device__float,
+.device:hover .device__reflect,.device:hover .device__reflect-card,
+.device:focus-within .device__card,.device:focus-within .device__float,
+.device:focus-within .device__reflect,.device:focus-within .device__reflect-card{animation-play-state:paused}
+.device__bloom{
+  position:absolute;inset:-46px;z-index:-2;pointer-events:none;
+  background:radial-gradient(closest-side,rgba(194,154,246,.55),rgba(194,154,246,0) 74%);
+  filter:blur(26px);animation:dev-bloom 4.5s ease-in-out infinite;
+}
+.device__face{
+  position:absolute;inset:0;overflow:hidden;isolation:isolate;
+  width:var(--dev-w);height:var(--dev-h);
+  border-radius:14px;border:1px solid var(--border-strong);
+  background-color:var(--card);box-shadow:0 24px 60px rgba(0,0,0,.5);
+  backface-visibility:hidden;text-align:left;
+}
+.device__face--front{
+  background-image:linear-gradient(115deg,
+    rgba(194,154,246,0) 34%,rgba(194,154,246,.12) 44%,rgba(139,211,255,.09) 50%,
+    rgba(255,166,214,.09) 56%,rgba(194,154,246,0) 66%);
+  background-size:250% 250%;animation:dev-holo 9s linear infinite;
+}
+.device__face--back{transform:rotateY(180deg);background-color:#181a1f;border-color:rgba(139,211,255,.28)}
+.device__bar{
+  display:flex;align-items:center;gap:7px;height:34px;padding:0 12px;
+  border-bottom:1px solid var(--border);background:rgba(255,255,255,.03);
+}
+.device__dot{width:8px;height:8px;border-radius:50%;background:var(--muted);flex:none}
+.device__dot:nth-child(1){background:var(--lavender)}
+.device__dot:nth-child(2){background:#8bd3ff}
+.device__dot:nth-child(3){background:#ffa6d6}
+.device__bar-title{margin-left:auto;font-family:var(--mono);font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim)}
+
+.device__view{display:grid;grid-template-columns:1fr 118px;gap:10px;padding:10px 12px;height:calc(100% - 34px)}
+.cal{display:grid;grid-template-rows:16px repeat(6,1fr);gap:3px;min-width:0}
+.cal__row{display:grid;grid-template-columns:repeat(7,1fr);gap:3px}
+.cal__row span{
+  display:flex;align-items:center;justify-content:center;border-radius:5px;
+  font-family:var(--mono);font-size:9px;color:var(--muted-fg);background:rgba(255,255,255,.02);
+}
+.cal__row--head span{background:none;color:var(--dim);font-size:8px;letter-spacing:.1em}
+.cal__row span.is-dim{opacity:.3}
+.cal__row span.has{background:rgba(194,154,246,.22);color:#e6d6ff}
+.cal__row span.is-today{background:var(--lavender);color:var(--ink);font-weight:700}
+
+.device__side{display:flex;flex-direction:column;gap:6px;min-width:0}
+.device__side-title{
+  font-family:var(--mono);font-size:8px;letter-spacing:.18em;text-transform:uppercase;color:var(--dim);
+  padding-bottom:5px;border-bottom:1px solid var(--border);
+}
+.ev{display:flex;align-items:center;gap:6px;padding:5px 6px;border-radius:6px;background:rgba(255,255,255,.035)}
+.ev i{width:3px;height:18px;border-radius:2px;background:var(--lavender);flex:none}
+.ev i.p0{background:#ffa6d6}
+.ev i.done{background:var(--dim)}
+.ev b{font-size:9.5px;font-weight:500;color:var(--cream);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ev em{font-family:var(--mono);font-size:8px;font-style:normal;color:var(--dim)}
+
+.kanban{display:grid;grid-template-columns:repeat(5,1fr);gap:7px;padding:10px 12px;height:calc(100% - 34px)}
+.kb-col{display:flex;flex-direction:column;gap:5px;min-width:0}
+.kb-col__head{
+  font-family:var(--mono);font-size:8px;letter-spacing:.1em;color:var(--dim);
+  padding-bottom:5px;border-bottom:1px solid var(--border);white-space:nowrap;
+  display:flex;justify-content:space-between;gap:4px;
+}
+.kb-col__head b{color:var(--lavender);font-weight:700}
+.kb-card{padding:6px;border-radius:6px;border:1px solid var(--border);background:rgba(255,255,255,.035)}
+.kb-card span{display:block;font-family:var(--mono);font-size:7px;letter-spacing:.1em;color:var(--dim);margin-bottom:3px}
+.kb-card b{display:block;font-size:8.5px;font-weight:500;line-height:1.3;color:var(--cream)}
+.kb-card.is-p0{border-color:rgba(255,166,214,.45)}
+.kb-card.is-p0 span{color:#ffa6d6}
+.kb-card.is-done{opacity:.45}
+.kb-card.is-done b{text-decoration:line-through}
+
+.device__shine{
+  position:absolute;inset:0;z-index:10;pointer-events:none;
+  background-image:linear-gradient(105deg,
+    rgba(255,255,255,0) 30%,rgba(139,211,255,.10) 42%,rgba(255,255,255,.22) 50%,
+    rgba(255,166,214,.12) 56%,rgba(194,154,246,.10) 62%,rgba(255,255,255,0) 72%);
+  background-repeat:no-repeat;background-size:300% 100%;
+  animation:dev-sheen 8s cubic-bezier(.4,0,.6,1) infinite;
+}
+.device__shadow{
+  /* 接地阴影：紧贴卡片下沿（原来隔了 22px，和倒影之间空出一截）。
+     透明度压低、加宽，压在倒影最亮处正好是"落点"，也不会糊成一块斑。 */
+  width:320px;height:16px;margin:8px auto 0;
+  background-image:radial-gradient(rgba(60,35,105,.42) 0%,rgba(60,35,105,.16) 45%,rgba(0,0,0,0) 72%);
+  animation:dev-shadow var(--dev-float-duration) ease-in-out infinite;
+}
+.device__face::after{
+  content:"";position:absolute;inset:0;z-index:11;pointer-events:none;opacity:0;
+  mix-blend-mode:overlay;transition:opacity .35s;
+  background-image:
+    radial-gradient(260px circle at var(--dev-px,50%) var(--dev-py,50%),#ffffff7a,#ffffff14 34%,#fff0 60%),
+    radial-gradient(460px circle at var(--dev-px,50%) var(--dev-py,50%),#8bd3ff2e,#8bd3ff00 55%),
+    radial-gradient(560px circle at var(--dev-px,50%) var(--dev-py,50%),#ffa6d624,#ffa6d600 62%);
+}
+.device[data-dev-pointer] .device__face::after{opacity:1}
+.device[data-dev-pointer] .device__face--front{
+  animation:none;
+  background-position:calc(var(--dev-pxn,.5) * 250%) calc(var(--dev-pyn,.5) * 250%);
+  transition:background-position .3s ease-out;
+}
+.device[data-dev-pointer] .device__shine{
+  animation:none;
+  background-position:calc((1 - var(--dev-pxn,.5)) * 400% - 150%) 0;
+  transition:background-position .3s ease-out;
+}
+
+@keyframes dev-spin{0%{transform:rotateX(3deg) rotateY(0)}50%{transform:rotateX(-3deg) rotateY(180deg)}100%{transform:rotateX(3deg) rotateY(360deg)}}
+@keyframes dev-float{0%,100%{transform:translateY(0)}50%{transform:translateY(-9px)}}
+@keyframes dev-holo{0%{background-position:0 0}100%{background-position:250% 250%}}
+@keyframes dev-sheen{0%{background-position:250% 0}60%,100%{background-position:-150% 0}}
+@keyframes dev-bloom{0%,100%{opacity:.42}50%{opacity:.92}}
+@keyframes dev-shadow{0%,100%{opacity:.55;transform:scaleX(1)}50%{opacity:.34;transform:scaleX(.84)}}
+
+/* ================================================================
+   5. 界面自动演示
+   ================================================================ */
+/* 演示页：让 inner 与 .wrap 逐层撑满，演示框才能吃掉剩余高度 */
+.page--demo .page__inner{display:flex;flex-direction:column;overflow:hidden;height:100%}
+
+
+/* ================================================================
+   6. 单特性页（双视图 / AI）
+   ================================================================ */
+.feature{
+  display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:clamp(24px,4.5vw,64px);align-items:center;
+}
+.feature--flip .feature__media{order:-1}
+.feature__kicker{display:flex;align-items:center;gap:10px;margin-bottom:clamp(10px,1.8vh,16px)}
+.chip{
+  display:inline-block;padding:3px 8px;border-radius:4px;background:var(--lavender);color:var(--ink);
+  font-family:var(--mono);font-size:9px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;
+}
+.feature h3{margin:0 0 clamp(8px,1.6vh,14px);font-size:var(--h3);font-weight:700;letter-spacing:-.03em;line-height:1.08}
+.feature p{margin:0;color:var(--muted-fg);font-size:clamp(.85rem,min(1.2vw,1.9vh),1rem)}
+.feature__list{list-style:none;margin:clamp(12px,2.2vh,20px) 0 0;padding:0;border-top:1px solid var(--border)}
+.feature__list li{
+  display:flex;gap:12px;padding:clamp(6px,1.2vh,10px) 0;border-bottom:1px solid var(--border);
+  font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted-fg);
+}
+.feature__list li span:first-child{color:var(--lavender)}
+
+.shot{
+  border:1px solid var(--border-strong);border-radius:12px;background:var(--card);
+  padding:clamp(10px,1.8vh,16px);position:relative;overflow:hidden;
+}
+.shot__bar{display:flex;align-items:center;gap:6px;padding-bottom:10px;border-bottom:1px solid var(--border);margin-bottom:10px}
+.shot__dot{width:8px;height:8px;border-radius:50%;background:var(--muted)}
+.shot__dot:first-child{background:var(--lavender)}
+.shot__title{margin-left:auto;font-family:var(--mono);font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:var(--dim)}
+.shot__body{display:grid;gap:7px}
+.shot__row{display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:rgba(255,255,255,.02)}
+.shot__row i{width:3px;height:20px;border-radius:2px;flex:none;background:var(--lavender)}
+.shot__row i.warn{background:#ffa6d6}
+.shot__row i.done{background:var(--dim)}
+.shot__row b{font-size:12px;font-weight:500;color:var(--cream);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.shot__row em{font-family:var(--mono);font-size:9px;font-style:normal;letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+.shot__grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-top:4px}
+.shot__cell{aspect-ratio:1;border:1px solid var(--border);border-radius:5px;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:8px;color:var(--dim)}
+.shot__cell.has{background:rgba(194,154,246,.16);color:var(--lavender)}
+.shot__cell.today{border-color:var(--lavender);color:var(--cream)}
+
+/* ================================================================
+   7. 功能清单
+   ================================================================ */
+.agenda{border-top:1px solid var(--border)}
+.agenda__row{
+  display:grid;grid-template-columns:52px 92px minmax(0,1fr);
+  gap:clamp(12px,2.2vw,28px);
+  padding:clamp(6px,1.15vh,13px) 0;
+  border-bottom:1px solid var(--border);
+  transition:background-color .3s ease;
+}
+.agenda__row:hover{background:rgba(244,242,236,.02)}
+.agenda__no{font-family:var(--mono);font-size:12px;font-weight:700;letter-spacing:.06em;color:var(--lavender)}
+.agenda__when{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);padding-top:2px}
+.agenda__body h3{
+  margin:0 0 2px;line-height:1.25;
+  font-size:clamp(.92rem,min(1.45vw,2.2vh),1.14rem);font-weight:700;letter-spacing:-.025em;
+}
+.agenda__body p{margin:0;color:var(--muted-fg);font-size:clamp(.72rem,min(.92vw,1.5vh),.83rem);line-height:1.4;max-width:64ch}
+.agenda__tags{display:flex;flex-wrap:wrap;gap:5px;margin-top:clamp(3px,.7vh,7px)}
+.tag{
+  padding:2px 6px;border:1px solid var(--border-strong);border-radius:4px;
+  font-family:var(--mono);font-size:8px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted-fg);
+}
+
+/* ================================================================
+   8. 模型供应商 + 技术栈
+   ================================================================ */
+.models{
+  display:grid;grid-template-columns:repeat(3,1fr);gap:1px;
+  background:var(--border);border:1px solid var(--border);border-radius:12px;overflow:hidden;
+}
+.model{background:var(--ink);padding:clamp(12px,2.2vh,22px) clamp(14px,1.8vw,22px);position:relative;display:flex;flex-direction:column;transition:background-color .3s}
+.model:hover{background:var(--card)}
+.model__no{
+  position:absolute;left:clamp(14px,1.8vw,22px);bottom:clamp(12px,2.2vh,20px);
+  padding:3px 8px;border-radius:4px;background:var(--lavender);color:var(--ink);
+  font-family:var(--mono);font-size:9px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;
+}
+.model h3{margin:0;font-size:clamp(1rem,min(1.6vw,2.4vh),1.3rem);font-weight:700;letter-spacing:-.02em}
+.model p{margin:4px 0 0;font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim)}
+.model__note{
+  margin:clamp(8px,1.4vh,14px) 0 0;padding-bottom:clamp(24px,3.4vh,32px);
+  color:var(--muted-fg);font-size:clamp(.74rem,min(.92vw,1.5vh),.82rem);line-height:1.5;
+}
+
+.marquee{margin-top:clamp(18px,3.4vh,38px)}
+.marquee__label{font-family:var(--mono);font-size:10px;letter-spacing:.22em;text-transform:uppercase;color:var(--dim);margin-bottom:clamp(10px,1.8vh,16px)}
+.marquee__window{
+  overflow:hidden;
+  -webkit-mask-image:linear-gradient(90deg,transparent,#000 5%,#000 95%,transparent);
+  mask-image:linear-gradient(90deg,transparent,#000 5%,#000 95%,transparent);
+}
+.marquee__track{display:flex;width:max-content;animation:marqueeDrift 65s linear infinite}
+.marquee__track--reverse{animation-duration:72s;animation-direction:reverse}
+.marquee__window:hover .marquee__track{animation-play-state:paused}
+.marquee__group{display:flex;flex:none}
+.tech{
+  flex:none;margin-right:10px;padding:clamp(8px,1.4vh,12px) 18px;border:1px solid var(--border);border-radius:8px;
+  font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted-fg);
+  white-space:nowrap;transition:border-color .25s,color .25s;
+}
+.tech:hover{border-color:var(--lavender);color:var(--lavender)}
+@keyframes marqueeDrift{100%{transform:translate(-50%)}}
+
+/* ================================================================
+   9. 获取方式
+   ================================================================ */
+.get-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:clamp(28px,5vw,72px);align-items:center}
+.plan-list{list-style:none;margin:clamp(16px,3vh,32px) 0 0;padding:0;border-top:1px solid var(--border)}
+.plan{display:flex;align-items:baseline;justify-content:space-between;gap:16px;padding:clamp(9px,1.7vh,16px) 0;border-bottom:1px solid var(--border)}
+.plan__name{font-size:clamp(.9rem,1.1vw,1rem);font-weight:500;letter-spacing:-.005em}
+.plan__desc{font-size:clamp(.75rem,.9vw,.84rem);color:rgba(244,242,236,.4)}
+.plan--hot .plan__name,.plan--hot .plan__price{color:var(--lavender)}
+.plan__price{font-family:var(--mono);font-size:clamp(1rem,1.3vw,1.15rem);letter-spacing:-.01em;color:rgba(244,242,236,.4);flex:none}
+.get-note{
+  margin-top:clamp(14px,2.6vh,28px);padding-top:clamp(10px,2vh,20px);border-top:1px solid var(--border);
+  font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);line-height:2;
+}
+.get-note b{color:var(--muted-fg);font-weight:400}
+
+/* ================================================================
+   10. FAQ + 页脚
+   ================================================================ */
+.page--faq .page__inner{display:flex;flex-direction:column}
+.faq{border-top:1px solid var(--border)}
+.faq__item{border-bottom:1px solid var(--border)}
+.faq__q{
+  width:100%;display:flex;align-items:center;gap:18px;padding:clamp(11px,2vh,20px) 0;
+  background:none;border:none;cursor:pointer;text-align:left;color:var(--cream);
+  font-family:var(--sans);font-size:clamp(.92rem,min(1.4vw,2.2vh),1.1rem);font-weight:500;letter-spacing:-.01em;
+}
+.faq__q:hover{color:var(--lavender)}
+.faq__idx{font-family:var(--mono);font-size:11px;letter-spacing:.1em;color:var(--dim);flex:none}
+.faq__sign{margin-left:auto;flex:none;width:14px;height:14px;position:relative}
+.faq__sign::before,.faq__sign::after{content:"";position:absolute;background:currentColor;transition:transform .3s var(--ease-out)}
+.faq__sign::before{left:0;right:0;top:6px;height:2px}
+.faq__sign::after{top:0;bottom:0;left:6px;width:2px}
+.faq__item.is-open .faq__sign::after{transform:scaleY(0)}
+.faq__a{overflow:hidden;height:0;transition:height .38s var(--ease-out)}
+.faq__a-inner{padding:0 0 clamp(14px,2.4vh,24px) 34px;max-width:70ch;color:var(--muted-fg);font-size:clamp(.82rem,1vw,.94rem)}
+.faq__a-inner strong{color:var(--cream);font-weight:600}
+
+.footer{margin-top:auto;padding-top:clamp(16px,3vh,32px);border-top:1px solid var(--border)}
+.footer-inner{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;align-items:center}
+.footer small{font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim)}
+.footer-links{display:flex;gap:18px}
+.footer-links a{font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim);transition:color .2s;cursor:pointer}
+.footer-links a:hover{color:var(--lavender)}
+
+/* ================================================================
+   11. 响应式
+   ================================================================ */
+@media (max-width:1080px){ .device{--dev-scale:.86} }
+@media (max-width:900px){
+  .hero-grid{grid-template-columns:1fr;justify-items:center;text-align:center}
+  .hero-kicker,.hero-meta,.hero-cta{justify-content:center}
+  .hero-sub{margin-left:auto;margin-right:auto}
+  .device{justify-self:center;--dev-scale:.9}
+  .feature{grid-template-columns:1fr;gap:clamp(16px,3vh,28px)}
+  .feature--flip .feature__media{order:0}
+  .stats{grid-template-columns:repeat(2,1fr)}
+  .stat:nth-child(2){border-right:none}
+  .stat:nth-child(1),.stat:nth-child(2){border-bottom:1px solid var(--border)}
+  .models{grid-template-columns:repeat(2,1fr)}
+  .get-grid{grid-template-columns:1fr;gap:clamp(16px,3vh,28px)}
+  .nav-meta{display:none}
+}
+@media (max-width:640px){
+  .nav-links .nav-link{display:none}
+  .device{--dev-scale:.72}
+  .agenda__row{grid-template-columns:40px minmax(0,1fr);gap:12px}
+  .agenda__when{grid-column:2;padding-top:0;margin-bottom:2px}
+  .agenda__body{grid-column:2}
+  .models{grid-template-columns:1fr}
+  .stats{grid-template-columns:1fr}
+  .stat{border-right:none;border-bottom:1px solid var(--border)}
+  .stat:last-child{border-bottom:none}
+  .hero-cta .btn{width:100%}
+}
+@media (max-width:420px){ .device{--dev-scale:.62} }
+
+/* ================================================================
+   12. 动效降级：取消吸附与自动翻页，退回普通长页
+   ================================================================ */
+@media (prefers-reduced-motion:reduce){
+  html{scroll-snap-type:none}
+  .device__card,.device__float,.device__shadow,.device__shine,
+  .device__bloom,.device__face--front,.device__reflect,.device__reflect-card,
+  .marquee__track{animation:none}
+  .device__card{transform:rotateY(0)}
+  .device__bloom{opacity:.65}
+  .device__face::after{display:none}
+  .marquee__window{-webkit-mask-image:none;mask-image:none}
+  .marquee__track{width:100%;flex-wrap:wrap;justify-content:center}
+  .marquee__group{flex-wrap:wrap;justify-content:center;width:100%}
+  .marquee__group[data-copy="1"]{display:none}
+  .word-inner{transform:none;transition:none}
+  .rise{opacity:1;transform:none;transition:none}
+  .rv,.rv.is-revealed{opacity:1;transform:none;filter:none;transition:none}
+  .h2,.stat b,.display .word-inner{animation:none}
+  .page{height:auto;min-height:100vh;min-height:100dvh}
+  .page__inner{overflow:visible;max-height:none}
+}
+</style>
+</head>
+<body>
+
+<!-- ================= 导航 ================= -->
+<nav class="nav" id="nav">
+  <div class="nav-inner">
+    <a class="brand" data-goto="top">
+      <span class="brand-mark" aria-hidden="true"></span>
+      智能日历
+    </a>
+    <span class="nav-meta">本地优先 · 多模型 AI · 开源免费</span>
+    <span class="nav-links">
+      <a class="nav-link" data-goto="views">双视图</a>
+      <a class="nav-link" data-goto="ai">AI</a>
+      <a class="nav-link" data-goto="modules">功能</a>
+      <a class="nav-link" data-goto="models">模型</a>
+      <a class="nav-link" data-goto="get">获取</a>
+      <a class="nav-link" data-goto="faq">FAQ</a>
+      <a class="nav-link" href="https://github.com/dengyinxi100-crypto/AI-Calendar" target="_blank" rel="noopener">GitHub</a>
+    </span>
+  </div>
+</nav>
+
+<div class="pager" id="pager" aria-label="页面导航"></div>
+
+<!-- ================= 1 / 8 · Hero ================= -->
+<header class="page" id="top">
+  <div class="page__inner">
+    <div class="wrap hero-grid">
+      <div>
+        <div class="hero-kicker">
+          <span class="kicker" data-reveal>CAL · 2026 · 本地运行</span>
+        </div>
+
+        <h1 class="display" data-split>一个人就是一支团队</h1>
+
+        <p class="lede hero-sub" data-reveal>
+          日历、看板、任务、周期日志与多模型 AI 助手，全部跑在你自己的机器上。
+          六家供应商可选，数据不出本机。
+        </p>
+
+        <div class="hero-meta" data-reveal>
+          <span><b>平台</b> Windows · Electron 43</span>
+          <span><b>存储</b> 本地 SQLite</span>
+          <span><b>许可</b> MIT 开源</span>
+        </div>
+
+        <div class="hero-cta" data-reveal>
+          <a class="btn" data-goto="demo">看它跑一遍 ↓</a>
+          <a class="btn btn--ghost" href="https://github.com/dengyinxi100-crypto/AI-Calendar" target="_blank" rel="noopener">GitHub 仓库 ↗</a>
+        </div>
+      </div>
+
+      <div class="device" id="device" tabindex="0" aria-label="产品预览：日历视图与看板视图">
+        <div class="device__scale">
+          <div class="device__scene">
+            <div class="device__float">
+              <div class="device__card">
+                <div class="device__bloom" aria-hidden="true"></div>
+
+                <div class="device__face device__face--front">
+                  <div class="device__bar">
+                    <span class="device__dot"></span><span class="device__dot"></span><span class="device__dot"></span>
+                    <span class="device__bar-title">日历 · 2026 年 7 月</span>
+                  </div>
+                  <div class="device__view">
+                    <div class="cal" aria-hidden="true">
+                      <div class="cal__row cal__row--head">
+                        <span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span>
+                      </div>
+                      <div class="cal__row">
+                        <span class="is-dim">29</span><span class="is-dim">30</span><span>1</span><span>2</span>
+                        <span class="has">3</span><span>4</span><span class="has">5</span>
+                      </div>
+                      <div class="cal__row">
+                        <span>6</span><span>7</span><span>8</span><span class="has">9</span>
+                        <span class="is-today">10</span><span>11</span><span class="has">12</span>
+                      </div>
+                      <div class="cal__row">
+                        <span>13</span><span>14</span><span class="has">15</span><span>16</span>
+                        <span>17</span><span>18</span><span>19</span>
+                      </div>
+                      <div class="cal__row">
+                        <span>20</span><span>21</span><span>22</span><span class="has">23</span>
+                        <span>24</span><span>25</span><span>26</span>
+                      </div>
+                      <div class="cal__row">
+                        <span>27</span><span>28</span><span>29</span><span>30</span>
+                        <span class="has">31</span><span class="is-dim">1</span><span class="is-dim">2</span>
+                      </div>
+                    </div>
+
+                    <div class="device__side">
+                      <div class="device__side-title">今天 · 3 项</div>
+                      <div class="ev"><i></i><b>产品评审</b><em>14:00</em></div>
+                      <div class="ev"><i class="p0"></i><b>AI 适配器</b><em>16:00</em></div>
+                      <div class="ev"><i class="done"></i><b>每日日志</b><em>17:30</em></div>
+                    </div>
+                  </div>
+                  <div class="device__shine" aria-hidden="true"></div>
+                </div>
+
+                <div class="device__face device__face--back">
+                  <div class="device__bar">
+                    <span class="device__dot"></span><span class="device__dot"></span><span class="device__dot"></span>
+                    <span class="device__bar-title">看板 · 5 列</span>
+                  </div>
+                  <div class="kanban" aria-hidden="true">
+                    <div class="kb-col">
+                      <div class="kb-col__head"><span>逾期</span><b>2</b></div>
+                      <div class="kb-card is-p0"><span>P2</span><b>提交 Q2 报告</b></div>
+                      <div class="kb-card"><span>P1</span><b>续费域名</b></div>
+                    </div>
+                    <div class="kb-col">
+                      <div class="kb-col__head"><span>今天</span><b>3</b></div>
+                      <div class="kb-card"><span>P0</span><b>AI 适配器</b></div>
+                      <div class="kb-card"><span>P1</span><b>产品评审</b></div>
+                      <div class="kb-card"><span>P1</span><b>每日站会</b></div>
+                    </div>
+                    <div class="kb-col">
+                      <div class="kb-col__head"><span>明天</span><b>2</b></div>
+                      <div class="kb-card"><span>P0</span><b>UI 重构</b></div>
+                      <div class="kb-card"><span>P1</span><b>客户回访</b></div>
+                    </div>
+                    <div class="kb-col">
+                      <div class="kb-col__head"><span>本周</span><b>3</b></div>
+                      <div class="kb-card is-p0"><span>P0</span><b>季度复盘</b></div>
+                      <div class="kb-card"><span>P1</span><b>DB 迁移</b></div>
+                      <div class="kb-card"><span>P1</span><b>文档补全</b></div>
+                    </div>
+                    <div class="kb-col">
+                      <div class="kb-col__head"><span>以后</span><b>2</b></div>
+                      <div class="kb-card"><span>P1</span><b>性能优化</b></div>
+                      <div class="kb-card is-done"><span>P0</span><b>V2.0 规划</b></div>
+                    </div>
+                  </div>
+                  <div class="device__shine" aria-hidden="true"></div>
+                </div>
+
+              </div>
+            </div>
+            <div class="device__shadow" aria-hidden="true"></div>
+            <div class="device__reflect" aria-hidden="true"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="wrap">
+      <div class="stats rise" data-reveal>
+        <div class="stat"><b>6</b><span>大功能模块</span></div>
+        <div class="stat"><b>6</b><span>大模型供应商</span></div>
+        <div class="stat"><b>100%</b><span>本地数据存储</span></div>
+        <div class="stat"><b>0</b><span>云端依赖</span></div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- ================= 2 / 8 · 界面自动演示 ================= -->
+<section class="page page--demo" id="demo">
+  <div class="page__inner">
+    <div class="wrap">
+      <div class="page-head page-head--row rise" data-reveal>
+        <div>
+          <div class="kicker" style="margin-bottom:10px">Live walkthrough</div>
+          <h2 class="h2">看它自己跑一遍</h2>
+        </div>
+        <span class="kicker">自动演示 · 无需操作</span>
+      </div>
+
+      <!-- DEMO-MODULE:START 自动生成，请勿手改 -->
+  <style>
+  /* 演示屏：整组元素（标题、徽标、提示、布局切换、卡片）一起往下移。
+     原来整组贴着屏顶，底部空一大截。
+     --demo-top-shift 必须声明在**祖先**节点（#demo）上，
+     var() 只沿继承链向下找，挂在宿主上、用在 .page__inner 上是不生效的（踩过）。
+     padding 也必须加在 .page__inner 上 —— 只压演示区（给宿主加 padding）
+     是没用的：卡片按 100cqh 换算，加内边距只会把容器压矮、卡片跟着缩。
+     这里同时把 promo 原本的 54~88px / 22~50px 留白收到 32/12，把空间让给演示。
+     只作用于 #demo 这一屏。
+     注意只保留这一条规则：早先另写过一条 #demo .page__inner，
+     被这条（特异性更高）覆盖，导致下移量怎么调都不生效。 */
+  #demo{--demo-top-shift:70px;--demo-card-gap:300px}
+  #demo > .page__inner{
+    display:flex;flex-direction:column;overflow:hidden;height:100%;
+    padding-top:calc(32px + var(--demo-top-shift, 0px));
+    padding-bottom:12px;
+  }
+  #demo > .page__inner > .wrap{display:flex;flex-direction:column;flex:1;min-height:0}
+  #demo .page-head{flex:none}
+
+  #demoLiveHost{
+    flex:1;min-height:0;width:100%;display:block;
+    overflow:hidden;overscroll-behavior:contain;
+    background:transparent;
+    container-type:size;
+    /* 演示卡尺寸上限（模块用 clamp 在这个区间内按可用高度自适应）。
+       内嵌位只是一栏，宽度上限 900px；高度上限 480px。
+       下限保证极矮容器下日历行高不至于压到不可读（单元格最小 38px）。 */
+    --demo-mock-max:900px;
+    --demo-card-max:480px;
+    --demo-card-min:240px;
+  }
+
+  /* ── 免责声明：介绍页全局刚需，固定在视口右下角 ──
+     它是页面级元素，不属于演示模块：
+       · position:fixed → 8 屏都可见，不随滚动消失
+       · 放在模块外 → 不再参与模块高度计算，也就不会和卡片抢位置
+         （原先是模块内的 position:absolute，卡片一长高就压住它）
+     配色取页面自己的 muted 调，与页面文字层级一致。 */
+  .intro-disclaimer{
+    position:fixed;right:20px;bottom:16px;z-index:40;
+    margin:0;width:auto;
+    font-family:var(--mono, monospace);font-size:11px;font-weight:400;
+    letter-spacing:.02em;color:var(--muted-fg);opacity:.6;
+    pointer-events:none;          /* 纯提示，不挡下面的点击 */
+    user-select:none;
+  }
+  @media (max-width:700px){ .intro-disclaimer{right:12px;bottom:10px;font-size:10px} }
+  </style>
+
+  <div id="demoLiveHost">
+    <!-- ══════════════════════════════════════════════════════════════════
+         界面自动演示 · 动画模块（自动生成，请勿手改）
+         由 build-demo-page.mjs 从 promo/index.html 抽取并作用域化，
+         再用 node sync-demo-module.mjs 注入本页。
+         重新生成： npm run sync:demo
+         ══════════════════════════════════════════════════════════════════ -->
+    <style>
+    /* 动画模块样式 —— 全部限定在 #<scope> 之内，不污染宿主页面。
+       模块是「工厂」而非单例：同一页可挂多份（介绍页内嵌 + 全屏浮层），
+       每份用各自的 scope id 隔离样式。 */
+    /* skipped: universal selector */#demoLive, #demoLive-body{
+      --bg-deepest:#08090a;--bg-page:#0d1114;--bg-sidebar:#111518;
+      --bg-panel:#0f1011;--bg-elevated:#191a1b;
+      --bg-glass:rgba(13,17,20,.92);
+      --bg-card:rgba(255,255,255,.02);--bg-card-hover:rgba(255,255,255,.04);
+      --bg-input:rgba(255,255,255,.03);--bg-overlay:rgba(0,0,0,.75);
+      --text-primary:#F7F8F8;--text-secondary:#D0D6E0;
+      --text-tertiary:#8A8F98;--text-quaternary:#62666d;--text-inverse:#F7F8F8;
+      --accent:#89A8D0;--accent-strong:#A0BCDE;--accent-hover:#7A9CC4;--accent-active:#6A8CB4;
+      --accent-gradient:linear-gradient(135deg,#7A9CC4,#6A8CB4);
+      --accent-shadow:rgba(137,168,208,.25);--accent-glow:rgba(137,168,208,.15);
+      --red:#F87171;--yellow:#FBBF24;--green:#34D399;--blue:#60A5FA;--cyan:#22D3EE;--slate:#64748b;
+      --pill-red:rgba(239,68,68,.12);--pill-yellow:rgba(245,158,11,.12);--pill-green:rgba(16,185,129,.12);
+      --border-subtle:rgba(255,255,255,.05);--border-light:rgba(255,255,255,.06);
+      --border-medium:rgba(255,255,255,.08);--border-focus:rgba(137,168,208,.3);
+      --shadow-xs:0 1px 2px rgba(0,0,0,.35);--shadow-sm:0 1px 2px rgba(0,0,0,.35),0 .5px 1px rgba(0,0,0,.2);
+      --shadow-md:0 4px 12px rgba(0,0,0,.45),0 1px 4px rgba(0,0,0,.35);
+      --shadow-lg:0 12px 32px rgba(0,0,0,.55),0 4px 12px rgba(0,0,0,.45),0 1px 4px rgba(0,0,0,.35);
+      --shadow-card:0 0 0 1px var(--border-light),0 2px 8px rgba(0,0,0,.35),0 .5px 2px rgba(0,0,0,.25);
+      --shadow-ring:0 0 0 1px rgba(255,255,255,.08);
+      --r-xs:4px;--r-sm:6px;--r-md:8px;--r-lg:12px;--r-xl:16px;--r-2xl:22px;--r-full:9999px;
+      --ease-out:cubic-bezier(.16,1,.3,1);--ease-spring:cubic-bezier(.22,1,.36,1);
+      --ease-out-back:cubic-bezier(.34,1.56,.64,1);--fast:.12s;--normal:.25s;--slow:.35s;--lazy:.5s;
+      --font:'Inter',-apple-system,BlinkMacSystemFont,'SF Pro Display','PingFang SC',sans-serif;
+      --mono:'SF Mono','JetBrains Mono','Menlo',monospace;
+      font-feature-settings:'cv01','ss03';
+    }#demoLive #app[data-theme="light"]{
+      --bg-deepest:#F8F9FA;--bg-page:#F2F4F6;--bg-sidebar:#E8ECF0;
+      --bg-panel:#fff;--bg-elevated:#F0F2F5;
+      --bg-glass:rgba(255,255,255,.92);
+      --bg-card:#fff;--bg-card-hover:#F5F6F8;
+      --bg-input:#F0F2F5;--bg-overlay:rgba(0,0,0,.4);
+      --text-primary:#1A1D22;--text-secondary:#4A4F58;
+      --text-tertiary:#7A7F88;--text-inverse:#fff;
+      --accent:#5A7DA8;--accent-strong:#4A6D98;--accent-hover:#6A8DB8;--accent-active:#3A5D88;
+      --border-subtle:rgba(0,0,0,.06);--border-light:rgba(0,0,0,.08);
+      --border-medium:rgba(0,0,0,.1);--border-focus:rgba(90,125,168,.3);
+      --shadow-xs:0 1px 2px rgba(0,0,0,.06);--shadow-sm:0 1px 2px rgba(0,0,0,.08);
+      --shadow-md:0 4px 12px rgba(0,0,0,.1);--shadow-lg:0 12px 32px rgba(0,0,0,.12);
+      --shadow-card:0 0 0 1px var(--border-light),0 2px 8px rgba(0,0,0,.06);
+      --shadow-ring:0 0 0 1px rgba(0,0,0,.06);
+      --accent-shadow:rgba(90,125,168,.15);--accent-glow:rgba(90,125,168,.08);
+      --pill-red:rgba(239,68,68,.08);--pill-yellow:rgba(245,158,11,.08);--pill-green:rgba(16,185,129,.08);
+    }#demoLive, #demoLive-body{scroll-behavior:smooth;scroll-snap-type:y mandatory;overflow-y:scroll;scroll-snap-stop:always;background:#08090a}#demoLive, #demoLive-body{font-family:var(--font);color:var(--text-primary);overflow-x:hidden;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;letter-spacing:-.01em}#demoLive .hero-section,#demoLive .demo-section,#demoLive .full-section{scroll-snap-align:start;scroll-snap-stop:always}#demoLive /* Nav */
+    .nav{position:fixed;top:0;left:0;right:0;z-index:1000;height:52px;display:flex;align-items:center;justify-content:space-between;padding:0 24px;background:rgba(8,9,10,.82);backdrop-filter:blur(24px) saturate(180%);-webkit-backdrop-filter:blur(24px) saturate(180%);border-bottom:1px solid var(--border-subtle)}#demoLive .nav::after{content:'';position:absolute;bottom:0;left:10%;right:10%;height:1px;background:linear-gradient(90deg,transparent,var(--accent-strong),transparent);opacity:.25;border-radius:1px;pointer-events:none}#demoLive .nav-brand{display:flex;align-items:center;gap:10px;font-weight:590;font-size:.88rem;color:var(--text-primary);letter-spacing:-.02em}#demoLive .nav-brand svg{width:22px;height:22px;flex-shrink:0}#demoLive .nav-items{display:flex;align-items:center;gap:4px;list-style:none}#demoLive .nav-link,#demoLive .nav-btn{font-size:.81rem;font-weight:510;color:var(--text-secondary);padding:6px 14px;border-radius:var(--r-sm);border:none;background:transparent;cursor:pointer;font-family:var(--font);text-decoration:none;transition:all var(--fast)}#demoLive .nav-link:hover,#demoLive .nav-btn:hover{background:var(--bg-card-hover);color:var(--text-primary)}#demoLive .nav-cta{padding:7px 16px;border-radius:var(--r-sm);background:var(--accent);color:var(--text-inverse);font-weight:590;font-size:.81rem;text-decoration:none;transition:all var(--fast);letter-spacing:-.01em}#demoLive .nav-cta:hover{filter:brightness(.92);box-shadow:0 2px 12px var(--accent-shadow);transform:translateY(-1px)}#demoLive /* Hero */
+    .hero-section{position:relative;width:100%;height:100vh;height:100dvh;overflow:hidden;background:#08090a;display:flex;align-items:center;justify-content:center}#demoLive #demoLiveCanvas{position:fixed;inset:0;width:100%;height:100%;display:block;z-index:0;pointer-events:none}#demoLive #heroCanvas{position:absolute;inset:0;width:100%;height:100%;z-index:1;pointer-events:none}#demoLive .hero-content{position:relative;z-index:2;text-align:center;padding:0 24px;max-width:860px}#demoLive .hero-badge{display:inline-flex;align-items:center;gap:6px;padding:7px 20px;border-radius:var(--r-full);background:var(--accent-glow);border:1px solid rgba(137,168,208,.12);font-size:.9rem;font-weight:510;color:var(--accent-strong);margin-bottom:28px;letter-spacing:.02em}#demoLive .hero-badge .pulse-dot{width:6px;height:6px;border-radius:50%;background:var(--accent-strong);animation:pulse-dot 2s ease-in-out infinite}
+    @keyframes pulse-dot{0%,100%{opacity:1;box-shadow:0 0 6px var(--accent-strong)}50%{opacity:.4;box-shadow:0 0 2px var(--accent-strong)}}#demoLive .hero-title{font-size:clamp(2.8rem,7vw,5rem);font-weight:700;line-height:1.05;letter-spacing:-.045em;margin-bottom:20px;background:linear-gradient(90deg,#F7F8F8 0%,#A0BCDE 25%,#c4d8f0 40%,#e8f0ff 50%,#c4d8f0 60%,#A0BCDE 75%,#F7F8F8 100%);background-size:200% 100%;-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;animation:hero-shimmer 5s linear infinite}
+    @keyframes hero-shimmer{0%{background-position:0 0}100%{background-position:200% 0}}#demoLive .hero-sub{font-size:clamp(.95rem,1.4vw,1.15rem);color:var(--text-secondary);font-weight:400;letter-spacing:.02em;margin-bottom:36px;line-height:1.6}#demoLive .hero-actions{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}#demoLive .hero-btn{padding:12px 28px;border-radius:var(--r-full);font-size:.9rem;font-weight:590;text-decoration:none;transition:all var(--normal);font-family:var(--font);letter-spacing:-.01em;cursor:pointer;border:none}#demoLive .hero-btn.primary{background:var(--accent-gradient);color:var(--text-inverse);box-shadow:0 2px 16px var(--accent-shadow)}#demoLive .hero-btn.primary:hover{filter:brightness(.9);transform:translateY(-2px);box-shadow:0 4px 24px var(--accent-shadow)}#demoLive .hero-btn.ghost{background:transparent;color:var(--accent-strong);border:1px solid rgba(137,168,208,.2)}#demoLive .hero-btn.ghost:hover{background:rgba(137,168,208,.08);border-color:var(--accent);transform:translateY(-2px)}#demoLive .scroll-indicator{position:absolute;bottom:32px;left:50%;transform:translateX(-50%);z-index:2;display:flex;flex-direction:column;align-items:center;gap:6px;cursor:pointer}#demoLive .scroll-indicator span{font-size:.62rem;color:var(--text-tertiary);letter-spacing:.06em;text-transform:uppercase;font-weight:510}#demoLive .scroll-arrow{width:18px;height:18px;border-right:1.5px solid var(--text-tertiary);border-bottom:1.5px solid var(--text-tertiary);transform:rotate(45deg);animation:scroll-bounce 2s ease-in-out infinite}
+    @keyframes scroll-bounce{0%,100%{transform:rotate(45deg) translate(0,0);opacity:.4}50%{transform:rotate(45deg) translate(4px,4px);opacity:1}}#demoLive /* Sections */
+    .page-section{position:relative;width:100%;overflow:hidden}#demoLive .page-section.demo-section{min-height:100vh;min-height:100dvh;display:flex;flex-direction:column;padding:32px 0 0 0}#demoLive .section-label{text-align:center;padding:16px 24px 4px;font-size:.9rem;color:var(--text-tertiary);letter-spacing:.06em;text-transform:uppercase;font-weight:590}#demoLive .full-section{min-height:100vh;min-height:100dvh;display:flex;align-items:center;justify-content:center;padding:60px 48px;position:relative;z-index:1}#demoLive .full-section .section-inner{max-width:1200px;width:100%;margin:0 auto;display:flex;flex-direction:column;min-height:100%}#demoLive .full-section .section-head{text-align:center;margin-bottom:36px}#demoLive .full-section .section-head h2{font-size:clamp(1.8rem,3vw,2.6rem);font-weight:700;background:linear-gradient(90deg,#F7F8F8 0%,#A0BCDE 25%,#c4d8f0 40%,#e8f0ff 50%,#c4d8f0 60%,#A0BCDE 75%,#F7F8F8 100%);background-size:200% 100%;-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin-bottom:8px;letter-spacing:-.03em;animation:hero-shimmer 10s linear infinite}#demoLive .full-section .section-head p{font-size:.95rem;color:var(--text-secondary);max-width:560px;margin:0 auto}#demoLive /* Layout Toggle */
+    .layout-toggle{position:relative;z-index:1;display:flex;justify-content:center;gap:0;margin:0 auto 6px;max-width:360px;background:var(--bg-card);border-radius:var(--r-full);padding:2px;border:1px solid var(--border-subtle)}#demoLive .layout-toggle button{flex:1;display:flex;align-items:center;justify-content:center;gap:4px;padding:7px 16px;border-radius:var(--r-full);font-size:.72rem;font-weight:510;border:none;background:transparent;color:var(--text-secondary);cursor:pointer;font-family:var(--font);transition:all var(--fast);white-space:nowrap}#demoLive .layout-toggle button.active{background:var(--bg-elevated);color:var(--text-primary);font-weight:590;box-shadow:var(--shadow-xs)}#demoLive /* App Mock */
+    .mock-wrap{position:relative;z-index:1;max-width:calc(100vw - 360px);width:100%;margin:0 auto;padding:0 4px}#demoLive .app{position:relative;display:flex;gap:0;min-height:450px;overflow:hidden;border-radius:var(--r-xl);box-shadow:var(--shadow-lg);background:var(--bg-panel);}#demoLive .app-sidebar{width:180px;min-width:180px;flex-shrink:0;display:flex;flex-direction:column;background:transparent;z-index:25;overflow:hidden;border-radius:var(--r-xl) 0 0 var(--r-xl)}#demoLive .sb-header{display:flex;align-items:center;gap:8px;padding:14px 12px 11px;font-size:.75rem;font-weight:590;color:var(--text-primary);letter-spacing:-.02em;border-bottom:1px solid var(--border-subtle)}#demoLive .sb-header svg{width:16px;height:16px;flex-shrink:0}#demoLive .sb-nav{display:flex;flex-direction:column;padding:5px;gap:1px}#demoLive .nav-item{display:flex;align-items:center;gap:7px;padding:7px 10px;border-radius:var(--r-sm);font-size:.72rem;font-weight:510;color:var(--text-secondary);cursor:pointer;border:none;background:none;font-family:var(--font);text-align:left;width:100%;transition:all var(--fast)}#demoLive .nav-item:hover{background:var(--bg-card-hover);color:var(--text-primary)}#demoLive .nav-item.active{background:var(--accent);color:var(--text-inverse);font-weight:590}#demoLive .nav-item .ni{font-size:.85rem;line-height:1;flex-shrink:0}#demoLive .nav-badge{margin-left:auto;background:var(--accent-strong);color:var(--text-inverse);font-size:.58rem;font-weight:590;padding:2px 7px;border-radius:var(--r-full);min-width:18px;text-align:center}#demoLive .sb-footer{padding:8px 6px;border-top:1px solid var(--border-subtle);margin-top:auto}#demoLive .btn-new{display:flex;align-items:center;justify-content:center;gap:5px;width:100%;padding:8px;border-radius:var(--r-full);background:var(--accent-gradient);color:var(--text-inverse);font-size:.7rem;font-weight:590;border:none;cursor:pointer;font-family:var(--font);box-shadow:0 0 0 0 var(--accent-strong);transition:all var(--fast)}#demoLive .app-main{flex:1;display:flex;flex-direction:column;overflow:hidden;position:relative;min-width:0;border-radius:0 var(--r-xl) var(--r-xl) 0}#demoLive .app-topbar{flex-shrink:0;height:40px;display:flex;align-items:center;justify-content:space-between;padding:0 10px;background:rgba(255,255,255,.02);position:relative;z-index:10}#demoLive .app-topbar::after{content:'';position:absolute;bottom:0;left:10px;right:10px;height:1px;background:linear-gradient(90deg,transparent,var(--accent-strong),transparent);opacity:.3;border-radius:1px;pointer-events:none}#demoLive .tb-left{display:flex;align-items:center;gap:6px}#demoLive .tb-right{display:flex;align-items:center;gap:1px;flex-wrap:nowrap}#demoLive .menu-btn{width:28px;height:28px;border-radius:var(--r-sm);border:1px solid var(--border-light);background:var(--bg-sidebar);color:var(--text-primary);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:.8rem}#demoLive .breadcrumb{font-size:.68rem;color:var(--text-tertiary);font-weight:510}#demoLive .tool-btn{display:flex;align-items:center;gap:3px;padding:4px 8px;border-radius:var(--r-sm);font-size:.68rem;font-weight:510;color:var(--text-secondary);cursor:pointer;border:1px solid transparent;background:none;font-family:var(--font);transition:all var(--fast)}#demoLive .tool-btn:hover,#demoLive .tool-btn.hl{background:var(--accent);color:var(--text-inverse);border-color:var(--border-focus);font-weight:590}#demoLive .content{flex:1;overflow:auto;padding:8px 10px;display:flex;flex-direction:column;gap:6px}#demoLive .cal-wrap{flex:1;display:flex;flex-direction:column;background:rgba(255,255,255,.01);border:1px solid var(--border-light);border-radius:var(--r-lg);padding:10px;box-shadow:var(--shadow-card);overflow:hidden}#demoLive .month-nav{display:flex;align-items:center;justify-content:space-between;margin-bottom:5px}#demoLive .month-nav h3{font-size:.85rem;font-weight:590;color:var(--text-primary);letter-spacing:-.025em}#demoLive .month-nav button{width:24px;height:24px;border-radius:var(--r-sm);border:1px solid var(--border-medium);background:var(--bg-card);cursor:pointer;color:var(--text-tertiary);display:flex;align-items:center;justify-content:center;font-size:.6rem;transition:all var(--fast)}#demoLive .wdays{display:grid;grid-template-columns:repeat(7,1fr);text-align:center;font-size:.6rem;font-weight:590;padding:3px 0;color:var(--text-tertiary);letter-spacing:.02em}#demoLive .wdays .we{color:var(--red);opacity:.5}#demoLive .cgrid{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;flex:1}#demoLive .cell{position:relative;min-height:38px;border:1px solid var(--border-subtle);border-radius:var(--r-xs);padding:2px 3px 1px;cursor:pointer;display:flex;flex-direction:column;background:rgba(255,255,255,.01);transition:all .3s var(--ease-spring)}#demoLive .cell.om{opacity:.22;background:var(--bg-panel)}#demoLive .cell.today{border-color:var(--accent-strong);box-shadow:0 0 0 3px var(--accent-glow);background:rgba(137,168,208,.05)}#demoLive .cell .dn{width:20px;height:20px;display:flex;align-items:center;justify-content:center;border-radius:50%;font-size:.62rem;font-weight:590;color:var(--text-secondary);margin:0 auto}#demoLive .cell.today .dn{background:var(--accent);color:var(--text-inverse);font-weight:700}#demoLive .cell .dots{display:flex;flex-wrap:wrap;gap:2px;justify-content:center;padding:2px 1px}#demoLive .cell .dot{width:5px;height:5px;border-radius:50%;flex-shrink:0}#demoLive .dot-r{background:var(--red)}#demoLive .dot-y{background:var(--yellow)}#demoLive .dot-g{background:var(--green)}#demoLive .dot-b{background:var(--blue)}#demoLive .kanban-wrap{flex:1;display:flex;gap:4px;padding:6px;overflow-x:auto;align-items:stretch;flex-wrap:nowrap}#demoLive .kcol{flex:1;min-width:120px;max-width:200px;display:flex;flex-direction:column;background:var(--bg-card);border-radius:var(--r-lg);border:1px solid var(--border-light);overflow:hidden}#demoLive .kcol-hdr{display:flex;align-items:center;gap:5px;padding:7px 10px;font-weight:590;font-size:.68rem;background:linear-gradient(180deg,var(--bg-card-hover),transparent);flex-shrink:0;border-bottom:1px solid var(--border-subtle);color:var(--text-primary)}#demoLive .kcol-hdr .kd{width:6px;height:6px;border-radius:50%;flex-shrink:0}#demoLive .kcol-cnt{margin-left:auto;background:var(--bg-card);color:var(--text-tertiary);font-size:.6rem;font-weight:590;min-width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center}#demoLive .kcol-body{flex:1;overflow-y:auto;padding:4px;display:flex;flex-direction:column;gap:3px}#demoLive .kcard{background:var(--bg-card-hover);border:1px solid var(--border-medium);border-radius:var(--r-sm);padding:5px 7px;cursor:pointer;transition:all .2s;border-left:3px solid var(--accent)}#demoLive .kcard .kt{font-size:.65rem;font-weight:510;color:var(--text-primary);line-height:1.3}#demoLive .kcard .km{display:flex;gap:4px;margin-top:2px}#demoLive .kprio{font-size:.52rem;font-weight:590;padding:1px 5px;border-radius:var(--r-xs)}#demoLive .kprio.p0{background:var(--pill-green);color:var(--green)}#demoLive .kprio.p1{background:var(--pill-yellow);color:var(--yellow)}#demoLive .kprio.p2{background:var(--pill-red);color:var(--red)}#demoLive .ktime{font-size:.55rem;color:var(--text-tertiary);margin-top:1px}#demoLive .theme-wrap{max-width:440px}#demoLive .theme-wrap h3{font-size:.88rem;font-weight:590;color:var(--text-primary);margin-bottom:14px;letter-spacing:-.025em}#demoLive .tasks-wrap{max-width:500px;padding:0 4px}#demoLive .tasks-wrap h3{font-size:.88rem;font-weight:590;color:var(--text-primary);margin-bottom:14px;letter-spacing:-.025em}#demoLive .task-list{display:flex;flex-direction:column;gap:4px}#demoLive .task-item{display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--bg-card);border-radius:var(--r-md);border:1px solid var(--border-light);transition:all .2s}#demoLive .task-item.done{opacity:.5}#demoLive .tchk{width:18px;height:18px;border-radius:50%;border:2px solid var(--border-medium);display:flex;align-items:center;justify-content:center;font-size:.6rem;color:var(--text-tertiary);flex-shrink:0}#demoLive .task-item.done .tchk{border-color:var(--green);background:var(--green);color:#fff}#demoLive .ttl{font-size:.78rem;font-weight:510;color:var(--text-primary)}#demoLive .tmeta{font-size:.65rem;color:var(--text-tertiary);margin-top:1px}#demoLive .sec-label{font-size:.68rem;font-weight:590;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}#demoLive .mode-sw{display:flex;background:var(--bg-card);border-radius:var(--r-full);padding:2px;gap:0;margin-bottom:12px;border:1px solid var(--border-subtle)}#demoLive .mode-sw button{flex:1;display:flex;align-items:center;justify-content:center;gap:4px;padding:6px 12px;border-radius:var(--r-full);font-size:.68rem;font-weight:510;cursor:pointer;border:none;font-family:var(--font);background:transparent;color:var(--text-secondary)}#demoLive .mode-sw button.active{background:var(--bg-elevated);color:var(--text-primary);font-weight:590;box-shadow:var(--shadow-xs)}#demoLive .color-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}#demoLive .color-swatch{aspect-ratio:1;border-radius:var(--r-md);cursor:pointer;border:2px solid transparent;transition:all var(--fast);position:relative;display:flex;align-items:center;justify-content:center;font-size:.58rem;font-weight:590;color:rgba(0,0,0,.35);font-family:var(--font)}#demoLive .color-swatch.sel{border-color:var(--accent-strong);box-shadow:0 0 0 3px var(--accent-glow);transform:scale(1.06)}#demoLive .color-swatch.sel::after{content:'\2713';position:absolute;top:2px;right:4px;font-size:.6rem;font-weight:700;color:#fff}#demoLive .app-rpanel{width:170px;flex-shrink:0;display:flex;flex-direction:column;gap:5px;padding:6px 6px;background:transparent;border-radius:0 var(--r-xl) var(--r-xl) 0;overflow-y:auto;z-index:10}#demoLive .minical{background:var(--bg-card);border-radius:var(--r-md);border:1px solid var(--border-light);padding:7px}#demoLive .minical-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:3px;font-weight:590;font-size:.68rem;color:var(--text-primary)}#demoLive .minical-hdr button{background:none;border:none;color:var(--text-tertiary);font-size:.8rem;cursor:pointer;padding:1px 4px;border-radius:3px}#demoLive .mc-wd{display:grid;grid-template-columns:repeat(7,1fr);text-align:center;font-size:.55rem;font-weight:590;color:var(--text-tertiary);margin-bottom:1px}#demoLive .mc-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:1px}#demoLive .mc-day{aspect-ratio:1;display:flex;flex-direction:column;align-items:center;justify-content:center;border-radius:3px;cursor:pointer;transition:all var(--fast);position:relative;font-size:.57rem;color:var(--text-primary)}#demoLive .mc-day:hover{background:var(--accent);color:var(--text-inverse);transform:scale(1.14);z-index:2}#demoLive .mc-day.om{opacity:.22}#demoLive .mc-day.td{background:var(--accent);font-weight:590}#demoLive .mc-dot{width:2px;height:2px;border-radius:50%;background:var(--accent-strong);margin-top:1px}#demoLive .tsum{background:var(--bg-card);border-radius:var(--r-md);border:1px solid var(--border-light);padding:8px}#demoLive .tsum .st{font-size:.7rem;font-weight:590;color:var(--text-primary);margin-bottom:5px}#demoLive .sgrid{display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-bottom:5px}#demoLive .scard{background:var(--bg-card-hover);border-radius:var(--r-sm);border-top:3px solid var(--accent);padding:5px;display:flex;flex-direction:column;align-items:center;gap:1px}#demoLive .scard .sv{font-size:.9rem;font-weight:700;color:var(--text-primary)}#demoLive .scard .sl{font-size:.55rem;color:var(--text-tertiary)}#demoLive .prog-hdr{display:flex;justify-content:space-between;font-size:.62rem;color:var(--text-tertiary);margin-bottom:2px}#demoLive .prog-bar{height:4px;background:var(--bg-input);border-radius:2px;overflow:hidden}#demoLive .prog-fill{height:100%;border-radius:2px;background:var(--yellow);transition:width .5s var(--ease-spring)}#demoLive .ai-ovl{position:absolute;inset:0;background:var(--bg-overlay);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);z-index:40;opacity:0;pointer-events:none;transition:opacity .25s}#demoLive .ai-ovl.show{opacity:1}#demoLive .ai-panel{position:absolute;top:0;right:0;width:340px;max-width:100%;height:100%;background:var(--bg-glass);backdrop-filter:blur(32px) saturate(180%);-webkit-backdrop-filter:blur(32px) saturate(180%);border-left:1px solid var(--border-medium);z-index:41;display:flex;flex-direction:column;transform:translateX(120%);transition:transform .3s var(--ease-spring);box-shadow:-2px 0 30px rgba(0,0,0,.15)}#demoLive .ai-panel.open{transform:translateX(0)}#demoLive .ai-hdr{padding:14px 18px;border-bottom:1px solid var(--border-light);display:flex;align-items:center;justify-content:space-between;flex-shrink:0}#demoLive .ai-hdr h4{font-weight:590;font-size:.85rem;color:var(--text-primary);letter-spacing:-.02em}#demoLive .ai-close{color:var(--text-tertiary);background:none;border:none;cursor:pointer;font-size:1rem;padding:4px 8px;border-radius:var(--r-xs);transition:all var(--fast);font-family:var(--font)}#demoLive .ai-close:hover{background:var(--bg-card-hover);color:var(--text-primary)}#demoLive .ai-tabs{display:flex;border-bottom:1px solid var(--border-light);padding:0 14px;flex-shrink:0}#demoLive .ai-tab{flex:1;padding:11px 4px;font-size:.72rem;cursor:pointer;background:none;border:none;font-family:var(--font);font-weight:510;color:var(--text-secondary);border-bottom:2px solid transparent;transition:all var(--fast);display:flex;align-items:center;justify-content:center;gap:4px}#demoLive .ai-tab:hover{color:var(--text-primary)}#demoLive .ai-tab.active{color:var(--text-inverse);border-bottom-color:var(--accent-strong);font-weight:590}#demoLive .ai-body{flex:1;overflow:auto;padding:14px 18px}#demoLive .msg{padding:9px 13px;border-radius:var(--r-md);font-size:.72rem;line-height:1.5;max-width:88%}#demoLive .msg.u{background:var(--accent);color:var(--text-inverse);border-bottom-right-radius:4px;align-self:flex-end;margin-left:auto;margin-bottom:6px}#demoLive .msg.a{background:var(--bg-input);color:var(--text-primary);border-bottom-left-radius:4px;align-self:flex-start;margin-bottom:6px}#demoLive .prov-btn{padding:6px 8px;border-radius:var(--r-sm);border:1px solid var(--border-light);background:var(--bg-input);color:var(--text-primary);cursor:pointer;font-size:.68rem;text-align:center;font-weight:400;font-family:var(--font);transition:all var(--fast)}#demoLive .prov-btn.sel{border:2px solid var(--accent-strong);background:rgba(137,168,208,.12);font-weight:590}#demoLive .sum-card{background:var(--bg-input);border-radius:var(--r-md);padding:12px;font-size:.72rem;line-height:1.6;color:var(--text-primary);border:1px solid var(--border-medium);white-space:pre-wrap;max-height:250px;overflow-y:auto}#demoLive input,#demoLive textarea,#demoLive select{background:var(--bg-input);border:1.5px solid var(--border-medium);border-radius:var(--r-sm);padding:7px 10px;color:var(--text-primary);font-size:.75rem;font-family:var(--font);width:100%;transition:border-color var(--fast)}#demoLive input:focus,#demoLive select:focus{outline:none;border-color:var(--accent-strong);box-shadow:0 0 0 3px rgba(137,168,208,.08)}#demoLive input[type="checkbox"]{width:16px;height:16px;accent-color:var(--accent-strong);cursor:pointer;flex-shrink:0}#demoLive select{cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%3Csvg width='10' height='7' viewBox='0 0 10 7'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%238A8F98' stroke-width='1.2' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 10px center;padding-right:28px}#demoLive .callout,#demoLive .highlight{position:absolute;pointer-events:none;z-index:50;opacity:0;transition:opacity .3s,transform .3s}#demoLive .callout.show,#demoLive .highlight.show{opacity:1}#demoLive .callout{padding:10px 14px;border-radius:var(--r-md);background:var(--bg-glass);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);border:1px solid rgba(137,168,208,.25);box-shadow:var(--shadow-lg);max-width:240px;font-size:.75rem;line-height:1.5;color:var(--text-primary);font-weight:510;transform:translateX(8px)}#demoLive .callout.show{transform:translateX(0)}#demoLive .callout strong{color:var(--text-primary);display:block;margin-bottom:4px;font-size:.95rem;font-weight:590}#demoLive .highlight{border-radius:var(--r-sm);border:2px solid var(--accent);box-shadow:0 0 16px var(--accent-shadow),inset 0 0 16px rgba(137,168,208,.03)}#demoLive .highlight.pulse{animation:pulse 1.4s ease-in-out infinite}#demoLive .hl{border:2px solid var(--accent)!important;box-shadow:0 0 18px var(--accent-shadow),inset 0 0 12px rgba(137,168,208,.05)!important}#demoLive .pulse-send{animation:pulse 1s ease-in-out infinite}
+    @keyframes pulse{0%,100%{box-shadow:0 0 16px var(--accent-shadow)}50%{box-shadow:0 0 36px rgba(137,168,208,.45)}}#demoLive .toast{position:fixed;bottom:32px;left:50%;transform:translateX(-50%) translateY(14px);padding:7px 16px;border-radius:var(--r-md);background:var(--bg-glass);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border:1px solid rgba(137,168,208,.12);color:var(--text-primary);font-size:.72rem;z-index:2000;opacity:0;transition:all .3s;box-shadow:var(--shadow-lg);font-weight:510}#demoLive .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}#demoLive .steps{display:none}#demoLive .step-dot{width:6px;height:6px;border-radius:50%;background:var(--text-quaternary);transition:all var(--fast);border:none;padding:0;cursor:pointer}#demoLive .step-dot.active{background:var(--accent);box-shadow:0 0 8px var(--accent-shadow)}#demoLive .step-dot.done{background:var(--accent-strong);opacity:.45}#demoLive .step-lbl{font-size:.67rem;color:var(--text-tertiary);margin:0 6px;min-width:80px;text-align:center;font-weight:510}#demoLive .fade-in{opacity:0;transform:translateY(36px);transition:opacity .55s var(--ease-spring),transform .55s var(--ease-spring)}#demoLive .fade-in.visible{opacity:1;transform:translateY(0)}#demoLive #security .fade-in,#demoLive #cta .fade-in{transition:opacity .9s var(--ease-spring)}#demoLive .feat{background:var(--bg-card);border:1px solid var(--border-light);border-radius:6px;padding:8px 10px;cursor:pointer;will-change:transform}#demoLive .feat:hover{transform:translateY(-2px);border-color:rgba(137,168,208,.2);box-shadow:var(--shadow-lg);transition:transform .1s,border-color .1s,box-shadow .1s}#demoLive .feat .fi{width:18px;height:18px;border-radius:4px;background:rgba(137,168,208,.1);display:flex;align-items:center;justify-content:center;margin-bottom:5px}#demoLive .feat .fi svg{width:11px;height:11px}#demoLive .feat .ft{font-weight:590;font-size:.7rem;margin-bottom:1px;color:var(--text-primary);letter-spacing:-.01em}#demoLive .feat .fd{font-size:.65rem;color:var(--text-secondary);line-height:1.4}#demoLive .feat .ftags{display:flex;gap:2px;flex-wrap:wrap;margin-top:4px}#demoLive .feat .ftags span{padding:1px 5px;border-radius:2px;font-size:.58rem;font-weight:510;background:rgba(137,168,208,.06);color:var(--accent-strong)}#demoLive .tech-tag{padding:10px 24px;border-radius:var(--r-full);font-size:1.1rem;font-weight:510;background:var(--bg-input);border:1px solid var(--border-medium);color:var(--text-secondary);cursor:pointer}#demoLive .tech-tag:hover{background:rgba(137,168,208,.06);border-color:var(--accent);color:var(--accent-strong);transition:background .12s,border-color .12s,color .12s}#demoLive .sec-item{display:flex;gap:14px;padding:18px 16px;background:var(--bg-card);border-radius:var(--r-md);border:1px solid var(--border-light);will-change:transform;cursor:pointer}#demoLive .sec-item:hover{border-color:rgba(137,168,208,.2);transform:translateY(-4px);box-shadow:var(--shadow-lg);transition:transform .1s,border-color .1s,box-shadow .1s}#demoLive .sec-item .si{width:34px;height:34px;border-radius:var(--r-sm);flex-shrink:0;background:rgba(137,168,208,.05);display:flex;align-items:center;justify-content:center;font-size:.95rem}#demoLive .sec-item .stt{font-weight:590;font-size:.88rem;margin-bottom:3px;color:var(--text-primary)}#demoLive .sec-item .sds{font-size:.78rem;color:var(--text-secondary);line-height:1.5}#demoLive .sec-badge{display:inline-flex;align-items:center;gap:5px;padding:5px 16px;border-radius:var(--r-full);background:var(--accent-glow);border:1px solid rgba(137,168,208,.08);font-size:.9rem;color:var(--accent-strong);font-weight:510;margin-bottom:10px}#demoLive .status{position:relative;z-index:1;text-align:center;margin-top:4px;font-size:.76rem;color:var(--text-tertiary)}#demoLive .demo-info-card{display:inline-flex;align-items:center;gap:8px;margin:0 auto 6px;padding:7px 18px;border-radius:var(--r-lg);background:var(--bg-card);border:1px solid var(--border-light);box-shadow:var(--shadow-sm);position:relative;z-index:1}#demoLive .demo-info-icon{font-size:.9rem}#demoLive .demo-info-text{font-size:.78rem;font-weight:510;color:var(--text-primary);letter-spacing:-.01em}#demoLive .demo-disclaimer{position:absolute;bottom:12px;right:18px;z-index:1;font-size:.72rem;color:#fff;font-weight:400;letter-spacing:.02em;opacity:.6}#demoLive .reflect{position:absolute;bottom:0;left:0;width:100%;height:180px;clip-path:polygon(38% 0,62% 0,100% 100%,0 100%);background:linear-gradient(to bottom,transparent,rgba(137,168,208,.14) 80%);pointer-events:none;opacity:0;transition:opacity .8s var(--ease-spring)}#demoLive .reflect.fade-in{transform:none!important}#demoLive .reflect.visible{opacity:1}@container (max-width:1100px){#demoLive .app-rpanel{width:150px}#demoLive .app-sidebar{width:150px}}@container (max-width:900px){#demoLive .app-rpanel{display:none}#demoLive .app-sidebar{width:150px}}@container (max-width:700px){#demoLive .app-sidebar{display:none}#demoLive .app{;}}
+
+    #demoLive{
+      /* 补齐 promo 页面原本挂在 :root / body 上的设计令牌 */
+      --bg-deepest:#08090a;--bg-page:#0d1114;--bg-sidebar:#111518;
+      --bg-panel:#0f1011;--bg-elevated:#191a1b;
+      --bg-glass:rgba(13,17,20,.92);
+      --bg-card:rgba(255,255,255,.02);--bg-card-hover:rgba(255,255,255,.04);
+      --bg-input:rgba(255,255,255,.03);--bg-overlay:rgba(0,0,0,.75);
+      --text-primary:#F7F8F8;--text-secondary:#D0D6E0;
+      --text-tertiary:#8A8F98;--text-quaternary:#62666d;--text-inverse:#F7F8F8;
+      --accent:#89A8D0;--accent-strong:#A0BCDE;--accent-hover:#7A9CC4;--accent-active:#6A8CB4;
+      --accent-gradient:linear-gradient(135deg,#7A9CC4,#6A8CB4);
+      --accent-shadow:rgba(137,168,208,.25);--accent-glow:rgba(137,168,208,.15);
+      --red:#F87171;--yellow:#FBBF24;--green:#34D399;--blue:#60A5FA;--cyan:#22D3EE;--slate:#64748b;
+      --pill-red:rgba(239,68,68,.12);--pill-yellow:rgba(245,158,11,.12);--pill-green:rgba(16,185,129,.12);
+      --border-subtle:rgba(255,255,255,.05);--border-light:rgba(255,255,255,.06);
+      --border-medium:rgba(255,255,255,.08);--border-focus:rgba(137,168,208,.3);
+      --shadow-xs:0 1px 2px rgba(0,0,0,.35);--shadow-sm:0 1px 2px rgba(0,0,0,.35),0 .5px 1px rgba(0,0,0,.2);
+      --shadow-md:0 4px 12px rgba(0,0,0,.45),0 1px 4px rgba(0,0,0,.35);
+      --shadow-lg:0 12px 32px rgba(0,0,0,.55),0 4px 12px rgba(0,0,0,.45),0 1px 4px rgba(0,0,0,.35);
+      --shadow-card:0 0 0 1px var(--border-light),0 2px 8px rgba(0,0,0,.35),0 .5px 2px rgba(0,0,0,.25);
+      --shadow-ring:0 0 0 1px rgba(255,255,255,.08);
+      --r-xs:4px;--r-sm:6px;--r-md:8px;--r-lg:12px;--r-xl:16px;--r-2xl:22px;--r-full:9999px;
+      --ease-out:cubic-bezier(.16,1,.3,1);--ease-spring:cubic-bezier(.22,1,.36,1);
+      --ease-out-back:cubic-bezier(.34,1.56,.64,1);--fast:.12s;--normal:.25s;--slow:.35s;--lazy:.5s;
+      --font:'Inter',-apple-system,BlinkMacSystemFont,'SF Pro Display','PingFang SC',sans-serif;
+      --mono:'SF Mono','JetBrains Mono','Menlo',monospace;
+      font-feature-settings:'cv01','ss03';
+      /* 演示卡宽度上限。内嵌在介绍页的一栏里、全屏在整块浮层里，
+         两种语境合适的上限不同，由宿主侧覆盖这个变量即可。 */
+      --demo-mock-max:1080px;
+      position:relative;
+      isolation:isolate;
+      overflow:hidden;
+      /* 不给自己铺底色：演示要「无框」地放在宿主页面上。
+         原样式这里是深色底（--bg-deepest: #08090a），内联后会在页面里
+         显出一个黑色矩形；宿主与模块都改为透明，页面背景自然透上来。
+         演示卡自身仍有浅色底，所以对比度不受影响。 */
+      background:transparent;
+      /* 上下留白由宿主按语境覆盖：内嵌时空间紧张，收到 0。
+         顶部单独留一个变量 —— 把演示主体整体下压用（卡片原本偏上、
+         下方还剩一截空间），这个留白会计入 100cqh，所以卡片高度会
+         相应收一点，不会把内容挤出容器。 */
+      padding:var(--demo-section-pad-top, 0) 0 var(--demo-section-pad-bottom, 18px);
+    }
+    /* 模块内的星空画布：原实现是 position:fixed 铺满视口（整页背景），
+       内联后必须收回模块内部，否则会盖住宿主页面并拦截点击 */
+    #demoLive #demoLiveCanvas{
+      position:absolute;inset:0;width:100%;height:100%;
+      pointer-events:none;z-index:0;opacity:.55;
+    }
+    /* ── 内联适配：四处「整页级」规则必须覆盖 ──
+       1) .mock-wrap 原为 max-width:calc(100vw - 360px)。整页里 100vw 即视口宽，
+          内联后它变成宿主页面的视口宽，演示卡宽度会被算错（视口越窄压得越扁）。
+          改用容器查询单位按模块自身宽度算，并保留 calc 作为老浏览器回退。
+          关键：原来那个 -360px 是**留白**（侧栏与页边），不能当成无用的减法去掉 ——
+          改成 100cqw - 24px 后卡片会在宽屏上撑满整屏（1920 视口下卡片宽 1896），
+          比例失衡、底部内容被挤出可视区。所以保留留白，并再压一个舒适上限。
+       2) .toast 原为 position:fixed，整页里相对视口居中；内联后会相对宿主页面
+          视口定位，直接飘到演示框外面 —— 而 overflow 裁不掉 fixed 元素。
+          改为相对模块绝对定位。
+       3) 模块自身左右不留白，宽度交给宿主容器决定。
+       4) .callout 的 z-index 高于 .ai-ovl，会浮在 AI 面板上面。 */
+    #demoLive .mock-wrap{
+      max-width:calc(100% - 48px);
+      max-width:min(calc(100cqw - 48px), var(--demo-mock-max));
+      padding:0;
+    }
+    #demoLive .toast{
+      position:absolute;
+      bottom:16px;
+      z-index:60;
+    }
+    #demoLive .app{
+      /* 卡片高度按「模块可用高度」自适应，不再写死。
+         原样式是 calc(100vh - 265px) —— 100vh 是**宿主页面**视口高，
+         跟模块实际有多少高度无关，内联时算出来的值大于可用空间，底部就被裁。
+
+         clamp(最小, 首选, 最大)：
+           · 首选 calc(100cqh - 200px)：撑满模块可用高度，日历因此舒展。
+             200px 是卡片之外元素的实测占高：提示（42）+ 布局切换（35）
+             + 两处 6px 间距 + 免责声明（18）及其下边距 + 模块上下留白。
+             这个偏移必须把免责声明算进去 —— 少算了它，卡片会长高到把
+             免责声明压在卡角上（实测重叠 30px）。
+           · 写 height:auto 不行 —— 那样卡片只停在内容自然高（实测 355px），
+             日历不跟着容器变高，白白浪费空间。
+           · 三个变量都**只由宿主设置**（见 sync-demo-module.mjs 的 HOST_CSS），
+             模块只消费、不声明 —— 这一点很关键：
+             若在模块容器 #SCOPE 上也声明它们，容器正是 .app 的祖先，
+             它的值会赢过宿主写在更外层容器上的值，宿主覆盖就失效了（踩过）。
+         日历是弹性网格（每行按比例伸缩，单元格最小 38px），所以压矮不会裁内容。 */
+      height:clamp(var(--demo-card-min, 280px), calc(100cqh - var(--demo-card-gap, 200px)), var(--demo-card-max, 560px));
+      /* 覆盖 promo 的 min-height:450px —— 它会把 clamp 的下限顶到 450，
+         矮容器下卡片就压不下来（实测 1280x720 因此被裁 74px）。
+         真正的下限交给 clamp 的第一个参数。 */
+      min-height:0;
+    }
+    /* promo 原本给内嵌演示留了 32px 顶部留白（整页时是给状态条让位），
+       内联后这段空间很紧张，收窄到 10px。 */
+    #demoLive .page-section.demo-section{padding:10px 0}
+    /* section 上还带着 promo 的 min-height:100vh（整页时意为「至少一屏高」）。
+       内联进宿主后它会把自身撑到远超实际需要的高度，多余部分被宿主裁掉。
+       这里去掉高度约束，交给宿主与模块内部的高度换算决定。 */
+    #demoLive .page-section.demo-section{
+      min-height:0;
+      display:flex;
+      flex-direction:column;
+      box-sizing:border-box;
+    }
+    /* 4) 气泡压过了遮罩：原样式里 .callout 的 z-index(50) 高于 .ai-ovl(40)，
+          于是 AI 面板打开时，那句「点击年月快速切换日期」会浮在面板上面。
+          整页里很少同时出现，内联后两份实例各跑各的、更容易撞上，这里压到遮罩之下。 */
+    #demoLive .callout,
+    #demoLive .highlight{z-index:38;}
+    </style>
+
+    <section class="page-section demo-section demo-live" id="demoLive">
+    <canvas id="demoLiveCanvas" aria-hidden="true"></canvas>
+      <div style="text-align:center;padding:22px 0 6px"><span class="sec-badge"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M12 3l2 5.5L19 10l-5 1.5L12 17l-2-5.5L5 10l5-1.5L12 3z"/></svg> 自动演示</span></div>
+      <div class="demo-info-card" id="demoInfoCard">
+        <span class="demo-info-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M9 18h6M10 22h4M12 2a7 7 0 00-7 7c0 2.4 1.2 4.5 3 5.7V17h8v-2.3c1.8-1.3 3-3.4 3-5.7A7 7 0 0012 2z"/></svg></span>
+        <span class="demo-info-text" id="demoInfoText">即将开始...</span>
+      </div>
+      <div class="layout-toggle" id="layoutToggle">
+        <button class="active" data-layout="calendar"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="vertical-align:-2px"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg> 日历布局</button>
+        <button data-layout="kanban"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="vertical-align:-2px"><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg> 看板布局</button>
+      </div>
+      <div class="mock-wrap">
+        <div class="app" id="app">
+          <div class="app-sidebar" id="appSidebar">
+            <div class="sb-header">
+              <svg viewBox="0 0 24 24" fill="none"><rect x="2" y="4" width="20" height="18" rx="4" stroke="currentColor" stroke-width="1.5"/><path d="M2 9h20M7 2v4M17 2v4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M9 15l2 2 4-4" stroke="var(--accent)" stroke-width="1.6" stroke-linecap="round"/></svg>
+              日历
+            </div>
+            <div class="sb-nav">
+              <button class="nav-item active" data-nav="calendar"><span class="ni"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg></span> 日历</button>
+              <button class="nav-item" data-nav="tasks"><span class="ni"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg></span> 任务 <span class="nav-badge">3</span></button>
+              <button class="nav-item" data-nav="ai" id="navAi"><span class="ni"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></span> AI 助手 <span class="nav-badge">ON</span></button>
+              <button class="nav-item" data-nav="theme"><span class="ni"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 000 20V2z"/></svg></span> 主题</button>
+            </div>
+            <div class="sb-footer"><button class="btn-new">+ 新建日程</button></div>
+          </div>
+          <div class="app-main" id="appMain">
+            <div class="app-topbar">
+              <div class="tb-left"><button class="menu-btn"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button><span class="breadcrumb">日历</span></div>
+              <div class="tb-right">
+                <button class="tool-btn" id="tbKanban"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="3" y="3" width="7" height="18" rx="1"/><rect x="14" y="3" width="7" height="10" rx="1"/></svg> 看板</button>
+                <button class="tool-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg> 今天</button>
+                <button class="tool-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg> 周期</button>
+                <button class="tool-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg></button>
+                <button class="tool-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg></button>
+              </div>
+            </div>
+            <div class="content" id="content">
+              <div class="cal-wrap" id="calWrap">
+                <div class="month-nav"><button>?</button><h3>2026 年 7 月</h3><button>?</button></div>
+                <div class="wdays"><span class="we">日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span class="we">六</span></div>
+                <div class="cgrid" id="calGrid"></div>
+              </div>
+              <div class="kanban-wrap" id="kanbanWrap" style="display:none">
+                <div class="kcol"><div class="kcol-hdr"><span class="kd" style="background:#ef4444"></span>逾期<span class="kcol-cnt">2</span></div><div class="kcol-body"><div class="kcard" style="border-left-color:#ef4444"><div class="kt"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="vertical-align:-2px;opacity:.7"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg> 提交 Q2 报告</div><div class="km"><span class="kprio p2">P2</span></div><div class="ktime">07-05</div></div><div class="kcard" style="border-left-color:#ef4444"><div class="kt"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="vertical-align:-2px;opacity:.7"><path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z"/></svg> 修复登录 Bug</div><div class="km"><span class="kprio p1">P1</span></div><div class="ktime">07-07</div></div></div></div>
+                <div class="kcol" id="colToday"><div class="kcol-hdr"><span class="kd" style="background:#f59e0b"></span>今天<span class="kcol-cnt">3</span></div><div class="kcol-body"><div class="kcard"><div class="kt"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="vertical-align:-2px;opacity:.7"><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg> 产品评审</div><div class="km"><span class="kprio p1">P1</span></div><div class="ktime">14:00</div></div><div class="kcard"><div class="kt"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="vertical-align:-2px;opacity:.7"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg> AI 适配器</div><div class="km"><span class="kprio p0">P0</span></div><div class="ktime">16:00</div></div><div class="kcard"><div class="kt"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="vertical-align:-2px;opacity:.7"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg> 每日日志</div><div class="ktime">17:30</div></div></div></div>
+                <div class="kcol"><div class="kcol-hdr"><span class="kd" style="background:#3b82f6"></span>明天<span class="kcol-cnt">2</span></div><div class="kcol-body"><div class="kcard"><div class="kt"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="vertical-align:-2px;opacity:.7"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg> UI 重构</div><div class="km"><span class="kprio p0">P0</span></div></div><div class="kcard"><div class="kt"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="vertical-align:-2px;opacity:.7"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg> DB 迁移</div><div class="km"><span class="kprio p1">P1</span></div></div></div></div>
+                <div class="kcol"><div class="kcol-hdr"><span class="kd" style="background:#06b6d4"></span>本周<span class="kcol-cnt">3</span></div><div class="kcol-body"><div class="kcard"><div class="kt"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="vertical-align:-2px;opacity:.7"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg> 文档</div></div><div class="kcard"><div class="kt"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="vertical-align:-2px;opacity:.7"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg> Sprint</div></div><div class="kcard"><div class="kt"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="vertical-align:-2px;opacity:.7"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M22 4l-10 7L2 4"/></svg> 邮件</div></div></div></div>
+                <div class="kcol"><div class="kcol-hdr"><span class="kd" style="background:#64748b"></span>以后<span class="kcol-cnt">1</span></div><div class="kcol-body"><div class="kcard"><div class="kt"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="vertical-align:-2px;opacity:.7"><path d="M12 2l2.1 6.6 6.9.3-5.3 4.2 1.8 6.7L12 16l-5.5 3.8L8.3 13 3 8.9l6.9-.3L12 2z"/></svg> V2.0</div><div class="km"><span class="kprio p0">P0</span></div></div></div></div>
+              </div>
+              <div class="tasks-wrap" id="tasksWrap" style="display:none">
+                <h3>任务列表</h3>
+                <div class="task-list">
+                  <div class="task-item done"><span class="tchk">?</span><div><div class="ttl">提交 Q2 报告</div><div class="tmeta">截止 07-05 · P2</div></div></div>
+                  <div class="task-item"><span class="tchk">○</span><div><div class="ttl">修复登录 Bug</div><div class="tmeta">截止 07-07 · P1</div></div></div>
+                  <div class="task-item"><span class="tchk">○</span><div><div class="ttl">产品评审会议</div><div class="tmeta">今天 14:00 · P1</div></div></div>
+                  <div class="task-item"><span class="tchk">○</span><div><div class="ttl">AI 适配器开发</div><div class="tmeta">今天 16:00 · P0</div></div></div>
+                  <div class="task-item"><span class="tchk">○</span><div><div class="ttl">数据库迁移</div><div class="tmeta">本周 · P1</div></div></div>
+                  <div class="task-item done"><span class="tchk">?</span><div><div class="ttl">每日日志优化</div><div class="tmeta">已完成 · 07-08</div></div></div>
+                </div>
+              </div>
+              <div class="theme-wrap" id="themeWrap" style="display:none">
+                <h3>主题设置</h3>
+                <div><div class="sec-label">外观模式</div><div class="mode-sw"><button class="active"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg> 浅色</button><button><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg> 深色</button></div></div>
+                <div><div class="sec-label">主题色</div>
+                <div class="color-grid">
+                  <div class="color-swatch sel" style="background:linear-gradient(135deg,#B8CEE8,#A0BFE0)">雾霾蓝</div>
+                  <div class="color-swatch" style="background:linear-gradient(135deg,#CBB8E8,#B8A0D8)">薰衣紫</div>
+                  <div class="color-swatch" style="background:linear-gradient(135deg,#B0E0D4,#90D0C0)">薄荷青</div>
+                  <div class="color-swatch" style="background:linear-gradient(135deg,#E8D0B8,#D8C0A0)">奶茶杏</div>
+                  <div class="color-swatch" style="background:linear-gradient(135deg,#F0C0C8,#E8A8B4)">珊瑚粉</div>
+                </div></div>
+              </div>
+            </div>
+            <div class="ai-ovl" id="aiOvl"></div>
+            <div class="ai-panel" id="aiPanel">
+              <div class="ai-hdr"><h4>AI 助手</h4><button class="ai-close" id="aiClose"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
+              <div class="ai-tabs">
+                <button class="ai-tab active" data-tab="chat"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="vertical-align:-1px"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg> 对话</button>
+                <button class="ai-tab" data-tab="summary"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="vertical-align:-1px"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg> 总结</button>
+                <button class="ai-tab" data-tab="workflow"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="vertical-align:-1px"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> 工作流</button>
+                <button class="ai-tab" data-tab="settings"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="vertical-align:-1px"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg> 设置</button>
+              </div>
+              <div class="ai-body" id="aiBody">
+                <div id="tabChat" style="display:flex;flex-direction:column;height:100%">
+                  <div style="flex:1;display:flex;flex-direction:column;gap:4px">
+                    <div class="msg u">帮我总结本周日程</div>
+                    <div class="msg a">好的！本周您有 8 个日程：<br>? 工作会议 ×3<br>? 学习任务 ×2<br>? 日常事务 ×3</div>
+                    <div class="msg u">分析日志趋势</div>
+                    <div class="msg a">近 7 天：工作 60% ↑、学习 25%、生活 15%。效率 +12%。</div>
+                  </div>
+                  <input id="aiChatInput" value="输入消息..." readonly style="margin-top:auto">
+                </div>
+                <div id="tabSummary" style="display:none;flex-direction:column;gap:10px">
+                  <div><label style="font-size:.68rem;color:var(--text-tertiary);margin-bottom:3px;display:block;text-transform:uppercase;letter-spacing:.04em;font-weight:590">总结类型</label><select><option>每日总结</option><option>每周总结</option><option>每月总结</option></select></div>
+                  <div><label style="font-size:.68rem;color:var(--text-tertiary);margin-bottom:3px;display:block;text-transform:uppercase;letter-spacing:.04em;font-weight:590">日期</label><input type="date" value="2026-07-10" readonly></div>
+                  <button style="padding:9px;border-radius:var(--r-sm);border:none;background:var(--accent);color:var(--text-inverse);font-weight:590;font-size:.78rem;cursor:pointer;font-family:var(--font)">生成总结</button>
+                  <div class="sum-card"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="vertical-align:-2px;opacity:.7"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg> 2026-07-10 日报总结
+
+    一、完成：产品评审 · AI 联调 · 日志记录
+    二、进行中：UI 重构(60%) · DB 迁移测试
+    三、明日：晨会 · UI 重构 · DB 上线</div>
+                </div>
+                <div id="tabSettings" style="display:none;flex-direction:column;gap:11px">
+                  <div>
+                    <label style="font-size:.78rem;color:var(--text-primary);margin-bottom:5px;display:block;font-weight:590">模型供应商</label>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px" id="provGrid">
+                      <button class="prov-btn sel" data-p="deepseek">DeepSeek</button>
+                      <button class="prov-btn" data-p="openai">OpenAI (GPT)</button>
+                      <button class="prov-btn" data-p="anthropic">anthropic</button>
+                      <button class="prov-btn" data-p="glm">智谱 GLM</button>
+                      <button class="prov-btn" data-p="qwen">通义千问</button>
+                      <button class="prov-btn" data-p="ollama">Ollama (本地)</button>
+                    </div>
+                  </div>
+                  <div id="onlineCfg">
+                    <div style="margin-bottom:8px"><label style="font-size:.68rem;color:var(--text-tertiary);margin-bottom:3px;display:block;text-transform:uppercase;letter-spacing:.04em;font-weight:590">选择模型</label><select><option>deepseek-v4-pro</option><option>deepseek-flash</option></select></div>
+                    <div style="margin-bottom:8px"><label style="font-size:.68rem;color:var(--text-tertiary);margin-bottom:3px;display:block;text-transform:uppercase;letter-spacing:.04em;font-weight:590">DeepSeek API Key</label><input type="password" value="sk-????????????" readonly></div>
+                  </div>
+                  <label style="display:flex;align-items:center;gap:7px;cursor:pointer;font-size:.82rem;color:var(--text-primary);font-weight:510">
+                    <input type="checkbox" checked> 启用 AI 辅助功能
+                  </label>
+                  <button style="padding:9px;border-radius:var(--r-sm);border:none;background:var(--accent);color:var(--text-inverse);font-weight:590;font-size:.78rem;cursor:pointer;font-family:var(--font);margin-top:2px">保存设置</button>
+                  <div style="font-size:.68rem;color:var(--text-quaternary);margin-top:2px;line-height:1.55">
+                    <p style="font-weight:590;margin-bottom:3px;color:var(--text-tertiary)">AI 辅助功能：</p>
+                    <ul style="padding-left:16px;margin-top:1px"><li>自动分类日志</li><li>日志内容分析</li><li>日/周/月总结</li><li>智能工作流</li></ul>
+                  </div>
+                </div>
+              </div>
+            </div>
+        </div>
+        <div class="app-rpanel" id="appRpanel" style="display:none">
+          <div class="minical">
+            <div class="minical-hdr"><button>?</button><span>2026年7月</span><button>?</button></div>
+            <div class="mc-wd"><span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span></div>
+            <div class="mc-grid" id="miniCalGrid"></div>
+          </div>
+          <div class="tsum">
+            <div class="st">任务概览</div>
+            <div class="sgrid">
+              <div class="scard"><span class="sv">5</span><span class="sl">全部</span></div>
+              <div class="scard" style="border-top-color:var(--yellow)"><span class="sv">2</span><span class="sl">待处理</span></div>
+              <div class="scard" style="border-top-color:var(--green)"><span class="sv">2</span><span class="sl">已完成</span></div>
+              <div class="scard" style="border-top-color:var(--red)"><span class="sv">1</span><span class="sl">已逾期</span></div>
+            </div>
+            <div class="prog-hdr"><span>完成率</span><span>40%</span></div>
+            <div class="prog-bar"><div class="prog-fill" style="width:40%"></div></div>
+          </div>
+        </div>
+      </div>
+      <div class="callout bl" id="callout"></div>
+      <div class="highlight" id="highlight"></div>
+      <div class="toast" id="toast"></div>
+      </div>
+      <div class="steps" id="stepsBar">
+        <button class="step-dot active" data-step="0"></button>|<button class="step-dot" data-step="1"></button>|<button class="step-dot" data-step="2"></button>|<button class="step-dot" data-step="3"></button>|<button class="step-dot" data-step="4"></button>|<button class="step-dot" data-step="5"></button>|<button class="step-dot" data-step="6"></button>|<button class="step-dot" data-step="7"></button>
+        <span class="step-lbl" id="stepLabel">日历视图</span>
+      </div>
+    </section>
+  </div>
+
+  <script>
+  /* 演示实例：页面加载即开始自动播放 */
+  (function(){
+    var mount = function(){ window.__demoModuleFactory && window.__demoModuleFactory('demoLive'); };
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount);
+    else mount();
+  })();
+  </script>
+
+  <!-- 免责声明：页面级固定元素，8 屏都可见 -->
+  <div class="intro-disclaimer">动画演示仅供参考，请以实物为准</div>
+<!-- DEMO-MODULE:END -->
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 3 / 8 · 双视图 ================= -->
+<section class="page" id="views">
+  <div class="page__inner">
+    <div class="wrap">
+      <div class="page-head rise" data-reveal>
+        <div class="kicker" style="margin-bottom:10px">Views · 日历 · 看板</div>
+        <h2 class="h2">双视图自由切换</h2>
+      </div>
+
+      <div class="feature">
+        <div>
+          <div class="feature__kicker">
+            <span class="chip">Views</span>
+            <span class="kicker">月 / 周 / 日 + Kanban</span>
+          </div>
+          <h3>日程与任务，<br>不再割裂在两地</h3>
+          <p>月 / 周 / 日日历与 Kanban 看板一键切换。Mini 日历快速跳转，任务按逾期、今天、明天、本周、以后五列自动归位。</p>
+          <ul class="feature__list">
+            <li><span>01</span><span>月 / 周 / 日 三种日历密度</span></li>
+            <li><span>02</span><span>五列看板 · 拖拽流转状态</span></li>
+            <li><span>03</span><span>P0 – P2 优先级与呼吸灯提示</span></li>
+          </ul>
+        </div>
+        <div class="feature__media">
+          <div class="shot" aria-hidden="true">
+            <div class="shot__bar">
+              <span class="shot__dot"></span><span class="shot__dot"></span><span class="shot__dot"></span>
+              <span class="shot__title">Kanban · 5 columns</span>
+            </div>
+            <div class="shot__body">
+              <div class="shot__row"><i class="warn"></i><b>提交 Q2 报告</b><em>逾期 · P2</em></div>
+              <div class="shot__row"><i></i><b>产品评审会议</b><em>今天 · P1</em></div>
+              <div class="shot__row"><i></i><b>AI 适配器开发</b><em>今天 · P0</em></div>
+              <div class="shot__row"><i class="done"></i><b>每日日志优化</b><em>已完成</em></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 4 / 8 · AI 助手 ================= -->
+<section class="page" id="ai">
+  <div class="page__inner">
+    <div class="wrap">
+      <div class="page-head rise" data-reveal>
+        <div class="kicker" style="margin-bottom:10px">AI · 多模型 · 流式响应</div>
+        <h2 class="h2">AI 是助手，不是房东</h2>
+      </div>
+
+      <div class="feature feature--flip">
+        <div>
+          <div class="feature__kicker">
+            <span class="chip">AI</span>
+            <span class="kicker">六个供应商可选</span>
+          </div>
+          <h3>六家供应商随意切换，<br>你的密钥你做主</h3>
+          <p>DeepSeek、GLM、OpenAI、Claude、通义千问、Ollama 六选一，流式响应。可挂本地 Ollama 实现全离线运行。</p>
+          <ul class="feature__list">
+            <li><span>01</span><span>日 / 周 / 月 智能总结</span></li>
+            <li><span>02</span><span>自然语言建日程，自动分类打标</span></li>
+            <li><span>03</span><span>多步骤工作流编排</span></li>
+          </ul>
+        </div>
+        <div class="feature__media">
+          <div class="shot" aria-hidden="true">
+            <div class="shot__bar">
+              <span class="shot__dot"></span><span class="shot__dot"></span><span class="shot__dot"></span>
+              <span class="shot__title">Calendar · 2026-07</span>
+            </div>
+            <div class="shot__grid">
+              <span class="shot__cell">1</span><span class="shot__cell">2</span><span class="shot__cell has">3</span>
+              <span class="shot__cell">4</span><span class="shot__cell has">5</span><span class="shot__cell">6</span>
+              <span class="shot__cell">7</span><span class="shot__cell">8</span><span class="shot__cell has">9</span>
+              <span class="shot__cell today">10</span><span class="shot__cell">11</span><span class="shot__cell has">12</span>
+              <span class="shot__cell">13</span><span class="shot__cell">14</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 5 / 8 · 功能清单 ================= -->
+<section class="page" id="modules">
+  <span id="features" class="anchor-alias" aria-hidden="true"></span><!-- 别名锚点：#features 与 #modules 同屏 -->
+  <div class="page__inner">
+    <div class="wrap">
+      <div class="page-head page-head--row rise" data-reveal>
+        <div>
+          <div class="kicker" style="margin-bottom:10px">六大模块 · 全部本地运行</div>
+          <h2 class="h2">功能清单</h2>
+        </div>
+        <span class="kicker">No account required</span>
+      </div>
+
+      <div class="agenda rise" data-reveal>
+        <div class="agenda__row">
+          <div class="agenda__no">01</div>
+          <div class="agenda__when">Views<br>视图</div>
+          <div class="agenda__body">
+            <h3>日历 · 看板双视图</h3>
+            <p>月 / 周 / 日日历与 Kanban 看板自由切换，Mini 日历快速跳转，日程与任务在同一份数据上呈现。</p>
+            <div class="agenda__tags"><span class="tag">月 · 周 · 日</span><span class="tag">Mini 日历</span><span class="tag">双布局</span></div>
+          </div>
+        </div>
+
+        <div class="agenda__row">
+          <div class="agenda__no">02</div>
+          <div class="agenda__when">Logs<br>日志</div>
+          <div class="agenda__body">
+            <h3>日志 + 周期系统</h3>
+            <p>富文本编辑配合 AI 自动分类。每日、工作日、每周、每月的周期性日志自动生成，不用手动重复录入。</p>
+            <div class="agenda__tags"><span class="tag">周期模板</span><span class="tag">AI 分类</span><span class="tag">自动生成</span></div>
+          </div>
+        </div>
+
+        <div class="agenda__row">
+          <div class="agenda__no">03</div>
+          <div class="agenda__when">Tasks<br>任务</div>
+          <div class="agenda__body">
+            <h3>看板任务管理</h3>
+            <p>逾期 / 今天 / 明天 / 本周 / 以后 五列看板，拖拽流转状态，P0 – P2 优先级配合呼吸灯提示紧迫度。</p>
+            <div class="agenda__tags"><span class="tag">五列看板</span><span class="tag">拖拽流转</span><span class="tag">P0 – P2</span></div>
+          </div>
+        </div>
+
+        <div class="agenda__row">
+          <div class="agenda__no">04</div>
+          <div class="agenda__when">AI<br>助手</div>
+          <div class="agenda__body">
+            <h3>多模型 AI 对话</h3>
+            <p>DeepSeek · GLM · OpenAI · Claude · 通义千问 · Ollama 六个供应商，流式响应，随时切换不锁定。</p>
+            <div class="agenda__tags"><span class="tag">6 模型</span><span class="tag">流式响应</span><span class="tag">可全离线</span></div>
+          </div>
+        </div>
+
+        <div class="agenda__row">
+          <div class="agenda__no">05</div>
+          <div class="agenda__when">Summary<br>总结</div>
+          <div class="agenda__body">
+            <h3>AI 总结 · 工作流</h3>
+            <p>日 / 周 / 月智能总结，加上多步骤任务链编排，让 AI 按你的规则推动任务继续往下走。</p>
+            <div class="agenda__tags"><span class="tag">日报 · 周报</span><span class="tag">工作流</span><span class="tag">任务链</span></div>
+          </div>
+        </div>
+
+        <div class="agenda__row">
+          <div class="agenda__no">06</div>
+          <div class="agenda__when">Privacy<br>安全</div>
+          <div class="agenda__body">
+            <h3>本地优先与安全基线</h3>
+            <p>日程、任务、AI 密钥全部存本地 SQLite。AI 只输出 JSON 变更描述，没有直连数据库的权限，后端逐条校验拦截。</p>
+            <div class="agenda__tags"><span class="tag">参数化防注入</span><span class="tag">WAL 崩溃保护</span><span class="tag">Electron 沙箱</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 6 / 8 · 模型 + 技术栈 ================= -->
+<section class="page" id="models">
+  <div class="page__inner">
+    <div class="wrap">
+      <div class="page-head page-head--row rise" data-reveal>
+        <div>
+          <div class="kicker" style="margin-bottom:10px">Model providers</div>
+          <h2 class="h2">六家供应商，随时换人</h2>
+        </div>
+        <span class="kicker">Bring your own key</span>
+      </div>
+
+      <div class="models rise" data-reveal>
+        <div class="model">
+          <h3>DeepSeek</h3>
+          <p>V4 Pro · Default</p>
+          <div class="model__note">默认供应商，中文理解与长文本总结表现稳定。</div>
+          <span class="model__no">Model_01</span>
+        </div>
+        <div class="model">
+          <h3>智谱 GLM</h3>
+          <p>GLM-5.3</p>
+          <div class="model__note">国内直连延迟低，适合高频的日志分类与打标。</div>
+          <span class="model__no">Model_02</span>
+        </div>
+        <div class="model">
+          <h3>OpenAI</h3>
+          <p>GPT-6 · 5.6</p>
+          <div class="model__note">复杂推理与多步骤工作流编排的首选。</div>
+          <span class="model__no">Model_03</span>
+        </div>
+        <div class="model">
+          <h3>Anthropic</h3>
+          <p>Claude Fable 5</p>
+          <div class="model__note">长上下文总结，适合月度回顾这类大输入。</div>
+          <span class="model__no">Model_04</span>
+        </div>
+        <div class="model">
+          <h3>通义千问</h3>
+          <p>Qwen3.8</p>
+          <div class="model__note">中文办公场景适配良好，接入成本低。</div>
+          <span class="model__no">Model_05</span>
+        </div>
+        <div class="model">
+          <h3>Ollama</h3>
+          <p>Local · 本地</p>
+          <div class="model__note">完全离线运行，断网也能用，数据零外发。</div>
+          <span class="model__no">Model_06</span>
+        </div>
+      </div>
+
+      <div class="marquee">
+        <div class="marquee__label">技术栈 · Built with</div>
+        <div class="marquee__window">
+          <div class="marquee__track">
+            <div class="marquee__group">
+              <span class="tech">Electron 43</span><span class="tech">React 18</span><span class="tech">TypeScript</span>
+              <span class="tech">Vite</span><span class="tech">Express</span><span class="tech">SQLite</span>
+              <span class="tech">better-sqlite3</span><span class="tech">Tailwind</span><span class="tech">framer-motion</span>
+            </div>
+            <div class="marquee__group" data-copy="1" aria-hidden="true">
+              <span class="tech">Electron 43</span><span class="tech">React 18</span><span class="tech">TypeScript</span>
+              <span class="tech">Vite</span><span class="tech">Express</span><span class="tech">SQLite</span>
+              <span class="tech">better-sqlite3</span><span class="tech">Tailwind</span><span class="tech">framer-motion</span>
+            </div>
+          </div>
+        </div>
+        <div class="marquee__window" style="margin-top:10px">
+          <div class="marquee__track marquee__track--reverse">
+            <div class="marquee__group">
+              <span class="tech">DeepSeek</span><span class="tech">GLM-5.3</span><span class="tech">OpenAI</span>
+              <span class="tech">Claude</span><span class="tech">通义千问</span><span class="tech">Ollama 本地</span>
+              <span class="tech">Windows EXE</span><span class="tech">MIT License</span>
+            </div>
+            <div class="marquee__group" data-copy="1" aria-hidden="true">
+              <span class="tech">DeepSeek</span><span class="tech">GLM-5.3</span><span class="tech">OpenAI</span>
+              <span class="tech">Claude</span><span class="tech">通义千问</span><span class="tech">Ollama 本地</span>
+              <span class="tech">Windows EXE</span><span class="tech">MIT License</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 7 / 8 · 获取方式 ================= -->
+<section class="page" id="get">
+  <div class="page__inner">
+    <div class="wrap">
+      <div class="page-head rise" data-reveal>
+        <div class="kicker" style="margin-bottom:10px">Get started</div>
+        <h2 class="h2">立即开始使用</h2>
+      </div>
+
+      <div class="get-grid">
+        <div class="rise" data-reveal>
+          <p class="lede" style="max-width:40ch">
+            开放源码，Clone 即运行。支持打包成 Windows 单文件 EXE，不需要注册账号。
+          </p>
+          <div class="get-note">
+            <b>无需注册</b> · 没有账号体系<br>
+            <b>无需订阅</b> · MIT 协议开源<br>
+            <b>无需上传</b> · 数据留在本机
+          </div>
+          <div class="get-actions">
+            <a class="btn" href="https://github.com/dengyinxi100-crypto/AI-Calendar" target="_blank" rel="noopener">GitHub 仓库 ↗</a>
+            <a class="btn btn--ghost" href="https://github.com/dengyinxi100-crypto/AI-Calendar/releases" target="_blank" rel="noopener">下载 EXE ↗</a>
+          </div>
+        </div>
+
+        <div class="rise" data-reveal>
+          <ul class="plan-list">
+            <li class="plan plan--hot">
+              <span><span class="plan__name">开源版</span> <span class="plan__desc">完整功能 · 无限制</span></span>
+              <span class="plan__price">¥0</span>
+            </li>
+            <li class="plan">
+              <span><span class="plan__name">Windows EXE</span> <span class="plan__desc">免安装 · 单文件</span></span>
+              <span class="plan__price">¥0</span>
+            </li>
+            <li class="plan">
+              <span><span class="plan__name">源码运行</span> <span class="plan__desc">Node 20+ · Clone 即用</span></span>
+              <span class="plan__price">¥0</span>
+            </li>
+            <li class="plan">
+              <span><span class="plan__name">AI 用量</span> <span class="plan__desc">自带 API Key 或本地模型</span></span>
+              <span class="plan__price">自付</span>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 8 / 8 · FAQ + 页脚 ================= -->
+<section class="page page--faq" id="faq">
+  <div class="page__inner">
+    <div class="wrap" style="display:flex;flex-direction:column;min-height:100%">
+      <div class="page-head page-head--row rise" data-reveal>
+        <div>
+          <div class="kicker" style="margin-bottom:10px">FAQ</div>
+          <h2 class="h2">常见问题</h2>
+        </div>
+        <span class="kicker">本地优先意味着什么</span>
+      </div>
+
+      <div class="faq rise" data-reveal>
+        <div class="faq__item">
+          <button class="faq__q" type="button">
+            <span class="faq__idx">01</span>
+            <span>我的数据会被上传吗？</span>
+            <span class="faq__sign" aria-hidden="true"></span>
+          </button>
+          <div class="faq__a"><div class="faq__a-inner">
+            不会。<strong>日程、任务、日志和 API Key 全部存在本机 SQLite 文件里</strong>，应用没有遥测、没有账号体系。
+            只有在你主动触发 AI 功能时，相关文本才会发送给你自己配置的模型供应商；挂 Ollama 可以做到完全离线。
+          </div></div>
+        </div>
+
+        <div class="faq__item">
+          <button class="faq__q" type="button">
+            <span class="faq__idx">02</span>
+            <span>AI 能直接改我的数据库吗？</span>
+            <span class="faq__sign" aria-hidden="true"></span>
+          </button>
+          <div class="faq__a"><div class="faq__a-inner">
+            不能。AI 只被允许输出 <strong>JSON 格式的变更描述</strong>，由后端逐条校验后再落库，
+            模型本身没有任何直连数据库的权限。所以即使模型返回了奇怪的内容，也不会直接写坏数据。
+          </div></div>
+        </div>
+
+        <div class="faq__item">
+          <button class="faq__q" type="button">
+            <span class="faq__idx">03</span>
+            <span>必须联网才能用吗？</span>
+            <span class="faq__sign" aria-hidden="true"></span>
+          </button>
+          <div class="faq__a"><div class="faq__a-inner">
+            不必。日历、看板、任务、日志、周期生成<strong>全部离线可用</strong>。
+            只有选择云端模型时 AI 功能才需要网络；切换到 Ollama 本地模型后，AI 也能完全离线跑。
+          </div></div>
+        </div>
+
+        <div class="faq__item">
+          <button class="faq__q" type="button">
+            <span class="faq__idx">04</span>
+            <span>怎么安装？需要什么环境？</span>
+            <span class="faq__sign" aria-hidden="true"></span>
+          </button>
+          <div class="faq__a"><div class="faq__a-inner">
+            两条路：直接下载 <strong>Windows 单文件 EXE</strong> 免安装运行；或者 Clone 仓库后用 Node 20+ 执行
+            <code>npm install &amp;&amp; npm run dev</code>。打包用 <code>npm run electron-build</code>。
+          </div></div>
+        </div>
+
+        <div class="faq__item">
+          <button class="faq__q" type="button">
+            <span class="faq__idx">05</span>
+            <span>许可证是什么？可以商用吗？</span>
+            <span class="faq__sign" aria-hidden="true"></span>
+          </button>
+          <div class="faq__a"><div class="faq__a-inner">
+            <strong>MIT 协议</strong>，可自由使用、修改、分发，包括商业用途。AI 调用产生的费用由你自己的 API Key 承担。
+          </div></div>
+        </div>
+      </div>
+
+      <footer class="footer">
+        <div class="footer-inner">
+          <small>AI 智能日历 · 本地优先 · 多模型 AI · 开源免费</small>
+          <span class="footer-links">
+            <a data-goto="views">双视图</a>
+            <a data-goto="modules">功能</a>
+            <a data-goto="models">模型</a>
+            <a data-goto="get">获取</a>
+            <a href="https://github.com/dengyinxi100-crypto/AI-Calendar" target="_blank" rel="noopener">GitHub</a>
+          </span>
+          <small>2026 · MIT License</small>
+        </div>
+      </footer>
+    </div>
+  </div>
+</section>
+
+</div>
+
+<script>
+(function(){
+  "use strict";
+  var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* ── 1. 标题逐字揭示 ── */
+  document.querySelectorAll("[data-split]").forEach(function(el){
+    var raw = (el.textContent || "").trim();
+    var units = /\s/.test(raw) ? raw.split(/\s+/) : Array.from(raw);
+    var joiner = /\s/.test(raw) ? " " : "";
+    el.textContent = "";
+    units.forEach(function(u, i){
+      var mask = document.createElement("span");
+      mask.className = "word-mask";
+      var inner = document.createElement("span");
+      inner.className = "word-inner";
+      inner.textContent = u;
+      inner.style.transitionDelay = (i * 42) + "ms";
+      mask.appendChild(inner);
+      el.appendChild(mask);
+      if (joiner && i < units.length - 1) el.appendChild(document.createTextNode(joiner));
+    });
+    el.setAttribute("aria-label", raw);
+  });
+
+  /* ── 1b. 逐字流光对齐 ──
+     渐变贴在每个字上，需要把「一个周期 = 标题整行宽」与每个字的横向取样点
+     交给 CSS，才能拼成一整条从左扫到右的光带。换行宽度变了要重量。 */
+  var flowTitle = document.querySelector("[data-split]");
+  function layoutFlow(){
+    if (!flowTitle) return;
+    var box = flowTitle.getBoundingClientRect();
+    if (!box.width) return;
+    flowTitle.style.setProperty("--flow-w", Math.round(box.width) + "px");
+    flowTitle.querySelectorAll(".word-inner").forEach(function(inner){
+      inner.style.setProperty("--flow-x", Math.round(inner.getBoundingClientRect().left - box.left) + "px");
+    });
+  }
+  layoutFlow();
+
+  /* ── 1c. 倒影长度 ──
+     卡片到下方内容（统计条等）的间距随断点变化很大：1440 宽有 128px，
+     553 宽只剩 69px。固定按卡片高度取比例，窄屏就会把倒影送进统计条里，
+     所以这里量出真实可用高度，换算成设备内部坐标写回 CSS。 */
+  function layoutReflect(){
+    var dev = document.getElementById("device");
+    if (!dev) return;
+    var cs = getComputedStyle(dev);
+    var scale = parseFloat(cs.getPropertyValue("--dev-scale")) || 1;
+    var devH = parseFloat(cs.getPropertyValue("--dev-h")) || 300;
+    /* 设备自己也有入场动画（上浮 20px + 缩到 .972），量位置前先把这段变换还原，
+       否则倒影长度会随测量时机漂移（曾因此短了 25px）。 */
+    var m = new DOMMatrixReadOnly(cs.transform === "none" ? "" : cs.transform);
+    var layoutTop = dev.getBoundingClientRect().top - m.m42;
+    var startY = layoutTop + (devH + 4) * scale;                        // 倒影起始线
+    var page = dev.closest(".page");
+    var limit = page ? page.getBoundingClientRect().bottom : window.innerHeight;
+    var wrap = dev.closest(".hero-grid");
+    if (wrap && wrap.parentElement){
+      Array.prototype.forEach.call(wrap.parentElement.children, function(sib){
+        if (sib === wrap) return;
+        var r = sib.getBoundingClientRect();
+        if (r.height > 0 && r.top >= startY - 4 && r.top < limit) limit = r.top;
+      });
+    }
+    var available = Math.max(40, limit - startY - 8);                   // 底部留 8px 余量
+    var len = Math.max(48, Math.min(devH * 0.40, available / scale));
+    if (Math.abs(len - (parseFloat(dev.style.getPropertyValue("--dev-reflect-len")) || 0)) > 1){
+      dev.style.setProperty("--dev-reflect-len", Math.round(len) + "px");
+    }
+
+  }
+  layoutReflect();
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(function(){ layoutFlow(); layoutReflect(); });
+
+  /* ── 1d. 生成倒影 ──
+     克隆一份卡片内部结构，交给 .device__reflect 裁切与遮罩。
+     克隆体的 CSS 动画是自己从 0 开始跑的，必须把时间轴拨到和原件一致，
+     否则倒影里的卡片和本体转的不是同一个角度 —— 一眼就假。 */
+  (function buildReflect(){
+    var dev = document.getElementById("device");
+    if (!dev) return;
+    var box = dev.querySelector(".device__reflect");
+    var card = dev.querySelector(".device__card");
+    var float = dev.querySelector(".device__float");
+    if (!box || !card) return;
+
+    var flip = document.createElement("div");
+    flip.className = "device__reflect-flip";
+    var clone = document.createElement("div");
+    clone.className = "device__reflect-card";
+    clone.innerHTML = card.innerHTML;
+    flip.appendChild(clone);
+    box.appendChild(flip);
+
+    function alignTime(src, dst){
+      if (!src.getAnimations || !dst.getAnimations) return;
+      var dstAnims = dst.getAnimations();
+      src.getAnimations().forEach(function(a){
+        dstAnims.forEach(function(b){
+          if (b.animationName !== a.animationName) return;
+          try { b.currentTime = a.currentTime; } catch (e) { /* 忽略 */ }
+          if (a.playState === "paused" && b.playState === "running") b.pause();
+          else if (a.playState === "running" && b.playState === "paused") b.play();
+        });
+      });
+    }
+    function syncReflect(){
+      alignTime(card, clone);      // 旋转
+      if (float) alignTime(float, box);  // 浮动
+    }
+    syncReflect();
+    requestAnimationFrame(syncReflect);
+  })();
+
+  /* ── 2. 出现动画：每次翻页（上滑 / 下滑）都重播 ──
+       · 脚本自动辨认「文案」与「模块」，不必在 HTML 上逐个加标记
+       · 整页滚入视口 → 本页内容按 DOM 顺序依次浮现（级联）
+       · 整页离开视口 → 悄悄复位，之后无论上滑还是下滑翻回来都会重演
+       · 页内超长（.page__inner 可滚）时，滚到哪一屏演到哪一屏 ── */
+  var pages = Array.prototype.slice.call(document.querySelectorAll(".page"));
+
+  /* 模块（成块的东西）：卡片、行、表格组、媒体框…… */
+  var BLOCK_SEL = "[data-reveal],.device,.shot,.marquee,.stats,.stat,.models,.model,"
+    + ".agenda,.agenda__row,.faq,.faq__item,.plan-list,.plan,.footer,.hero-meta,.hero-cta,"
+    + ".feature__list li";
+  /* 文案（字）：标题、正文、标签、注脚…… */
+  var TEXT_SEL = "h1,h2,h3,p,.lede,.kicker,.chip,.tag,.agenda__no,.agenda__when,.model__note,"
+    + ".plan__name,.plan__desc,.plan__price,.get-note,.marquee__label,.footer small";
+  /* 这些区域是装饰性示意 / 固定件，不参与演出 */
+  var TEXT_SKIP = ".device,.marquee__track,.faq__a,.pager,.nav";
+
+  /* 打标期间先关掉过渡，让"透明 + 上浮"的起始态被直接钉死；
+     打完标再放开，并立刻解除整页遮挡 —— 此时内容才第一次可见，且处于隐藏态。 */
+  var rootEl = document.documentElement;
+  rootEl.classList.add("anim-init");
+
+  var pageUnits = pages.map(function(page){
+    var blocks = Array.prototype.slice.call(page.querySelectorAll(BLOCK_SEL));
+
+    /* 只留最内层模块：外层容器交给子模块演出，避免嵌套叠影 */
+    var kept = blocks.filter(function(el){
+      return !blocks.some(function(other){ return other !== el && el.contains(other); });
+    });
+
+    var units = kept.concat(
+      Array.prototype.slice.call(page.querySelectorAll(TEXT_SEL)).filter(function(el){
+        if (el.closest(TEXT_SKIP)) return false;
+        return !kept.some(function(box){ return box.contains(el); });
+      })
+    );
+    units.sort(function(a, b){ return (a.compareDocumentPosition(b) & 4) ? -1 : 1; });
+
+    units.forEach(function(el){
+      el.classList.add("rv");
+      el.classList.add(el.hasAttribute("data-split") ? "rv--split"
+        : el.classList.contains("device") ? "rv--soft"
+        : el.matches(TEXT_SEL) ? "rv--text" : "rv--block");
+      /* 动画收尾后摘掉滤镜，静止状态不留合成层 */
+      el.addEventListener("transitionend", function(ev){
+        if (ev.target === el && ev.propertyName === "transform") el.style.filter = "none";
+      });
+    });
+    return units;
+  });
+
+  /* 被合并掉的容器若带 data-reveal，直接显示，别让它一直藏着 */
+  document.querySelectorAll("[data-reveal]").forEach(function(el){
+    if (!el.classList.contains("rv")) el.classList.add("is-revealed");
+  });
+
+  /* 起始态已就位：放开过渡 + 放行整页显示 */
+  void document.body.offsetHeight;
+  rootEl.classList.remove("anim-init");
+  rootEl.classList.add("rv-ready");
+
+  /* 是否已进入可视带（页内滚动容器会收窄可视带） */
+  function inBand(el){
+    var vh = window.innerHeight || document.documentElement.clientHeight;
+    var top = 0, bottom = vh;
+    var box = el.closest(".page__inner");
+    if (box){
+      var r = box.getBoundingClientRect();
+      top = Math.max(top, Math.min(r.top - 36, r.bottom - 80));
+      bottom = Math.min(bottom, r.bottom);
+    }
+    var b = el.getBoundingClientRect();
+    return b.bottom > top && b.top < bottom;
+  }
+
+  /* 入场动画会让未显形的元素临时下移几十像素，这段临时外溢不能算作「页内可滚」 */
+  var slackCache = [];
+  function revealSlack(box){
+    var pi = pages.indexOf(box.closest(".page"));
+    if (slackCache[pi] >= 0) return slackCache[pi];
+    var units = pageUnits[pi] || [], slack = 0;
+    units.forEach(function(el){
+      if (el.classList.contains("is-revealed")) return;
+      var y = parseFloat(getComputedStyle(el).getPropertyValue("--rv-y"));
+      if (y > slack) slack = y;
+    });
+    slackCache[pi] = slack;
+    return slack;
+  }
+
+  /* 本页还没露面的文案与模块，按先后顺序依次浮现。
+     force=true 用于翻页：目标页马上就会占满整屏，不必等它进入可视带才起步 ——
+     内容跟着页面一起到位，"演完"的时刻也就不再受单元数量影响。 */
+  function revealPage(pi, force){
+    var units = pageUnits[pi];
+    if (!units) return;
+    var pending = units.filter(function(el){
+      return !el.classList.contains("is-revealed") && (force || inBand(el));
+    });
+    if (!pending.length) return;
+    /* 级联总跨度固定 180ms：单元多的页步进小、单元少的页步进大，
+       于是每一屏"演完"的时刻基本一致 —— 不会有的页快、有的页慢。 */
+    var step = Math.max(20, Math.min(56, 180 / Math.max(1, pending.length - 1)));
+    pending.forEach(function(el, i){
+      el.style.setProperty("--rv-delay", Math.round(Math.min(i * step, 220)) + "ms");
+      el.classList.add("is-revealed");
+    });
+    slackCache[pi] = -1;
+  }
+
+  /* 复位：整页离开视口后还原，下次翻回来重新演一遍 */
+  function rewindPage(pi){
+    var units = pageUnits[pi], page = pages[pi];
+    if (!units || !page) return;
+    if (!units.some(function(el){ return el.classList.contains("is-revealed"); })) return;
+    page.classList.add("is-resetting");
+    units.forEach(function(el){
+      el.classList.remove("is-revealed");
+      el.style.removeProperty("--rv-delay");
+      el.style.removeProperty("filter");
+    });
+    void page.offsetWidth;                 /* 强制回流：复位必须瞬时完成 */
+    page.classList.remove("is-resetting");
+    slackCache[pi] = -1;
+  }
+
+  /* 除当前页外，凡已整页离开视口的一律复位 —— 这样上滑、下滑回看都会重播。
+     用几何判定而非 IntersectionObserver：贴边吸附时后者的 0 阈值不一定投递。 */
+  function rewindOffscreen(keep){
+    var vh = window.innerHeight || document.documentElement.clientHeight;
+    pages.forEach(function(page, i){
+      if (i === keep) return;
+      var r = page.getBoundingClientRect();
+      if (r.bottom <= 1 || r.top >= vh - 1) rewindPage(i);
+    });
+  }
+
+  /* 降级环境（无 IntersectionObserver / 用户要求减弱动效）：一次性全部显形，绝不把内容藏起来。
+     正常环境的首屏显形放到脚本最后，且要等一帧 —— 见那里的说明。 */
+  var animEnabled = !reduce && ("IntersectionObserver" in window);
+  if (!animEnabled){
+    pageUnits.forEach(function(units){
+      units.forEach(function(el){ el.classList.add("is-revealed"); });
+    });
+  }
+
+  /* ── 3. FAQ 手风琴 ── */
+  document.querySelectorAll(".faq__item").forEach(function(item){
+    var q = item.querySelector(".faq__q");
+    var a = item.querySelector(".faq__a");
+    if (!q || !a) return;
+    q.addEventListener("click", function(){
+      var open = item.classList.contains("is-open");
+      item.closest(".faq").querySelectorAll(".faq__item.is-open").forEach(function(other){
+        if (other === item) return;
+        other.classList.remove("is-open");
+        other.querySelector(".faq__a").style.height = "0px";
+      });
+      if (open){
+        item.classList.remove("is-open");
+        a.style.height = "0px";
+      } else {
+        item.classList.add("is-open");
+        // height:0 + overflow:hidden 时 scrollHeight 仍返回完整内容高度
+        a.style.height = a.scrollHeight + "px";
+      }
+    });
+  });
+
+  /* ── 4. 3D 窗口指针追踪高光 ── */
+  var device = document.getElementById("device");
+  if (device && !reduce){
+    var raf = 0, px = 0, py = 0;
+    var apply = function(){
+      raf = 0;
+      device.style.setProperty("--dev-px", px + "%");
+      device.style.setProperty("--dev-py", py + "%");
+      device.style.setProperty("--dev-pxn", (px / 100).toFixed(3));
+      device.style.setProperty("--dev-pyn", (py / 100).toFixed(3));
+    };
+    device.addEventListener("pointermove", function(e){
+      var r = device.getBoundingClientRect();
+      px = Math.max(0, Math.min(100, ((e.clientX - r.left) / r.width) * 100));
+      py = Math.max(0, Math.min(100, ((e.clientY - r.top) / r.height) * 100));
+      device.setAttribute("data-dev-pointer", "");
+      if (!raf) raf = requestAnimationFrame(apply);
+    });
+    device.addEventListener("pointerleave", function(){
+      device.removeAttribute("data-dev-pointer");
+    });
+  }
+
+
+  var nav = document.getElementById("nav");
+
+  /* ── 6. 整页吸附 + 滚轮/键盘翻页 ──
+       · 吸附本身交给 CSS scroll-snap，触摸与滚动条走原生行为
+       · 滚轮被接管：一次滚动 = 一页
+       · 某页内容超出时（.page__inner 可滚）优先滚页内，滚到底再翻页
+       · 全屏演示浮层打开时不翻页 ── */
+  var pager = document.getElementById("pager");
+  var current = 0, locked = false, acc = 0, accTimer = 0, lockTimer = 0, revealTimer = 0;
+
+  if (pager){
+    pages.forEach(function(p, i){
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "pager__dot";
+      b.setAttribute("aria-label", "第 " + (i + 1) + " 页");
+      b.addEventListener("click", function(){ goTo(i); });
+      pager.appendChild(b);
+    });
+  }
+  function paintPager(){
+    if (!pager) return;
+    Array.prototype.forEach.call(pager.children, function(d, i){
+      d.classList.toggle("is-active", i === current);
+    });
+  }
+
+  /* 以视口中线判定当前页 */
+  function measure(){
+    var mid = window.innerHeight / 2, best = 0, bestD = Infinity;
+    pages.forEach(function(p, i){
+      var r = p.getBoundingClientRect();
+      var d = Math.abs(r.top + r.height / 2 - mid);
+      if (d < bestD){ bestD = d; best = i; }
+    });
+    current = best;
+    paintPager();
+  }
+
+  function goTo(i){
+    i = Math.max(0, Math.min(pages.length - 1, i));
+    if (i === current){
+      // 同页也滚到顶，避免页内残留滚动位置
+      pages[i].scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
+      return;
+    }
+    current = i;
+    paintPager();
+    locked = true;
+    clearTimeout(lockTimer);
+    clearTimeout(revealTimer);
+    pages[i].scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
+    /* 目标页刚开始滑入就起步演出（不必等吸附停稳再等一轮去抖），
+       内容随页到位 —— 这是"翻页显得快"的关键。settle() 只作兜底。 */
+    revealTimer = setTimeout(function(){ revealPage(i, true); }, reduce ? 0 : 140);
+    lockTimer = setTimeout(function(){
+      locked = false;
+      settle();
+    }, reduce ? 80 : 540);
+  }
+
+  /* 指针所在的可滚动页内容器：还能继续滚就把滚轮让给它 */
+  function innerScroller(el, dy){
+    while (el && el !== document.body){
+      if (el.classList && el.classList.contains("page__inner")){
+        var slack = revealSlack(el);        // 扣除入场动画造成的临时外溢
+        var canDown = el.scrollTop + el.clientHeight < el.scrollHeight - 2 - slack;
+        var canUp = el.scrollTop > 2;
+        if ((dy > 0 && canDown) || (dy < 0 && canUp)) return el;
+      }
+      el = el.parentElement;
+    }
+    return null;
+  }
+
+  /* 翻页动作（滚轮与 iframe 转发共用） */
+  function pageBy(deltaY){
+    if (locked) return;
+    acc += deltaY;
+    clearTimeout(accTimer);
+    accTimer = setTimeout(function(){ acc = 0; }, 220);
+    if (Math.abs(acc) < 28) return;
+    var dir = acc > 0 ? 1 : -1;
+    acc = 0;
+    goTo(current + dir);
+  }
+
+  window.addEventListener("wheel", function(e){
+    if (e.ctrlKey) return;                      // 交给浏览器缩放
+    var dy = e.deltaY;
+    if (!dy) return;
+    if (innerScroller(e.target, dy)) return;    // 页内可滚则先滚页内
+    e.preventDefault();
+    pageBy(dy);
+  }, { passive: false });
+
+  /* 演示 iframe 是同源的，但滚轮事件不会跨文档冒泡到外层 —— 不接管的话，
+     光标停在演示区上就永远翻不到下一页。这里在 iframe 内部再挂一次：
+     演示自己还能滚就让它滚，滚不动了才把翻页交给外层。 */
+  /* 演示区已由内联模块（#demoLive 容器）承载，不再是 iframe。
+     仍然要转发滚轮：光标停在演示区上时，滚轮不接管就永远翻不到下一页。 */
+
+  var SCROLL_KEYS = ["ArrowDown","PageDown"," ","Spacebar","ArrowUp","PageUp","Home","End"];
+
+  window.addEventListener("keydown", function(e){
+    var t = e.target;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.key === "ArrowDown" || e.key === "PageDown" || e.key === " " || e.key === "Spacebar"){
+      e.preventDefault(); goTo(current + 1);
+    } else if (e.key === "ArrowUp" || e.key === "PageUp"){
+      e.preventDefault(); goTo(current - 1);
+    } else if (e.key === "Home"){
+      e.preventDefault(); goTo(0);
+    } else if (e.key === "End"){
+      e.preventDefault(); goTo(pages.length - 1);
+    }
+  });
+
+  /* 滚动/缩放停稳：同步当前页 + 导航样式 → 本页内容依次浮现 → 已离屏的页复位。
+     复位后无论是上滑还是下滑翻回来，都会重新演一遍。 */
+  var syncTimer = 0;
+  function settle(){
+    measure();
+    revealPage(current);
+    rewindOffscreen(current);
+  }
+  window.addEventListener("scroll", function(){
+    clearTimeout(syncTimer);
+    syncTimer = setTimeout(settle, 70);
+    nav.classList.toggle("is-stuck", window.scrollY > 24);
+  }, { passive: true });
+  window.addEventListener("resize", function(){
+    layoutFlow();
+    layoutReflect();
+    settle();
+  });
+
+  /* 页内滚动容器（内容超出一屏的页）同样按屏演出 */
+  document.querySelectorAll(".page__inner").forEach(function(box){
+    var timer = 0;
+    box.addEventListener("scroll", function(){
+      clearTimeout(timer);
+      timer = setTimeout(settle, 90);
+    }, { passive: true });
+  });
+
+  /* ── 7. 锚点统一走 goTo，保持翻页动画一致 ── */
+  document.querySelectorAll("[data-goto]").forEach(function(a){
+    a.addEventListener("click", function(ev){
+      ev.preventDefault();
+      var target = document.getElementById(a.getAttribute("data-goto"));
+      if (!target) return;
+      var p = target.closest(".page") || target;
+      var idx = pages.indexOf(p);
+      goTo(idx < 0 ? 0 : idx);
+    });
+  });
+
+  /* ── 8. 带 #锚点 直接进来（如 /intro.html#features）：按页对齐 + 立即演出 ──
+       浏览器自己的锚点滚动会把页内 padding 也算进去，落点会偏出吸附位；
+       这里统一用 block:start 对齐到页首，再按这一页演一遍。 */
+  function jumpToHash(){
+    var id = "";
+    try { id = decodeURIComponent((location.hash || "").slice(1)); } catch (e) { id = ""; }
+    if (!id) return false;
+    var target = document.getElementById(id);
+    var page = target && target.closest(".page");
+    var idx = page ? pages.indexOf(page) : -1;
+    if (idx < 0) return false;
+    current = idx;
+    paintPager();
+    page.scrollIntoView({ behavior: "auto", block: "start" });
+    revealPage(idx);
+    rewindOffscreen(idx);
+    return true;
+  }
+  window.addEventListener("hashchange", jumpToHash);
+
+  nav.classList.toggle("is-stuck", window.scrollY > 24);
+  /* 首屏 / 深链的显形必须等一帧：打标（.rv）与显形（.is-revealed）若落在同一帧，
+     浏览器会把两次样式变更合并，没有起始态就没有过渡 —— 内容会"直接出现"。
+     先强制一次样式计算把隐藏起始态钉住，下一帧再显形。 */
+  if (animEnabled){
+    void document.body.offsetHeight;
+    requestAnimationFrame(function(){
+      if (!jumpToHash()) settle();
+    });
+  } else {
+    jumpToHash();
+  }
+})();
+</script>
+<script>
+/* 动画模块工厂（自动生成，请勿手改）
+
+   两层作用域都是必需的：
+   1) 最外层 IIFE —— 原脚本有一批顶层 const/let，直接内联会和宿主页面的
+      同名声明落在同一作用域，重复声明直接抛 SyntaxError。
+   2) 每个实例再包一层函数作用域 —— 原脚本是「单例」写法：
+      let demoLoopTimer / stepTimer、const $ / $$、aiProviders、calStep 等
+      都在顶层声明一次。若两份实例共用这些变量，后挂载的那份一调 resetDemo()
+      就会把前一份的定时器清掉，表现为「后开的那份动画永远不启动」。
+      所以实例体必须整体住进自己的函数作用域里。 */
+(function(){
+'use strict';
+window.__demoModuleFactory = function(SCOPE){
+  if (!SCOPE) throw new Error('demoModule 需要实例 id，例如 demoModule("demoLive")');
+  var root = document.getElementById(SCOPE);
+  if (!root) { console.warn('[demoModule] 找不到容器 #' + SCOPE); return null; }
+  // 启动延时（毫秒）：可由宿主容器上的 data-start-delay 覆盖。
+  // 属性挂在宿主容器上，而 SCOPE 指向模块 section 本身，所以两级都看。
+  var delayHost = root.dataset.startDelay !== undefined ? root
+                : (root.parentElement && root.parentElement.dataset.startDelay !== undefined ? root.parentElement : null);
+  var START_DELAY = delayHost ? Number(delayHost.dataset.startDelay) : 1200;
+
+  // 实例体：DOM 引用、状态、演示步骤、启动逻辑。
+  // 住进独立函数作用域是必需的 —— 原脚本是单例写法，一批顶层 const/let
+  // 若与宿主或其它实例共用，会互相清定时器、互相覆盖 DOM 引用。
+  // 返回值目前没被使用（演示是"跑起来就不管"的形式，随页面存活），
+  // 保留 root 便于调试；定时器句柄挂在 root.__demoTimers 上。
+  (function(SCOPE, root, START_DELAY){
+    // ==================== GLOBAL STAR CANVAS (非首页) ====================
+    (function(){
+      const c=document.getElementById(SCOPE + 'Canvas'), ctx=c.getContext('2d');
+      let W,H,stars=[];
+      function resize(){ W=window.innerWidth; H=window.innerHeight; c.width=W; c.height=H; }
+      resize(); window.addEventListener('resize',resize); setTimeout(resize,200);
+
+      for(let i=0;i<150;i++){
+        stars.push({x:Math.random()*W, y:Math.random()*H, r:Math.random()*1.5+0.3, a:Math.random(), da:(Math.random()-0.5)*0.012});
+      }
+
+      function draw(){
+        ctx.clearRect(0,0,W,H);
+        for(let s of stars){
+          s.a+=s.da; if(s.a>0.85||s.a<0.12) s.da*=-1;
+          ctx.beginPath(); ctx.arc(s.x,s.y,s.r,0,Math.PI*2);
+          ctx.fillStyle=`rgba(255,255,255,${s.a})`; ctx.fill();
+        }
+        requestAnimationFrame(draw);
+      }
+      requestAnimationFrame(draw);
+    })();
+
+
+    // ==================== DOM REFS ====================
+    const $=s=>root.querySelector(s), $$=s=>root.querySelectorAll(s);
+
+    root.__demoTimers = {};
+    const layoutBtns=$$('#layoutToggle button'), app=$('#app'),
+      calGrid=$('#calGrid'), miniCalGrid=$('#miniCalGrid'),
+      appRpanel=$('#appRpanel'),
+      stepsBar=$('#stepsBar'), demoInfoText=$('#demoInfoText'),
+      aiPanel=$('#aiPanel'), aiOvl=$('#aiOvl'),
+      aiProviders=$$('#provGrid .prov-btn'),
+      aiChatInput=$('#aiChatInput'),
+      toastEl=$('#toast'),
+      aiTabs=$$('#aiPanel .ai-tab'),
+      calWrap=$('#calWrap'), kanbanWrap=$('#kanbanWrap'), appMain=$('#appMain'), themeWrap=$('#themeWrap'), tasksWrap=$('#tasksWrap'),
+      calloutEl=$('#callout');
+
+    // ==================== STATE ====================
+    let currentLayout='calendar', calStep=0, kbStep=0, stepTimer=null, activeMode='calendar';
+
+    // ==================== CALENDAR GRID ====================
+    function buildCalendarGrid(target){
+      target.innerHTML='';
+      for(let i=0;i<35;i++){
+        let n=i<4?27+i:i-3;
+        let cls='cell'; if(n===7) cls+=' today';
+        let dots='';
+        if(n===7) dots='<div class="dot dot-b"></div>';
+        if(n===14) dots='<div class="dot dot-g"></div>';
+        if(n===21) dots='<div class="dot dot-y"></div>';
+        target.innerHTML+=`<div class="${cls}"><span style="font-size:.72rem;font-weight:510;color:var(--text-primary);padding:2px 4px">${n}</span><div class="dots">${dots}</div></div>`;
+      }
+    }
+    function buildMiniCalGrid(){
+      miniCalGrid.innerHTML='';
+      for(let i=0;i<35;i++){
+        let n=i<3?28+i:i-2;
+        let cls='mc-day'; if(n===7) cls+=' td';
+        if(i<3||i>31) cls+=' om';
+        miniCalGrid.innerHTML+=`<div class="${cls}"><span>${n}</span>${(n===7||n===14||n===21)?'<div class="mc-dot"></div>':''}</div>`;
+      }
+    }
+    buildCalendarGrid(calGrid); buildMiniCalGrid();
+
+    // ==================== LAYOUT ====================
+    function setLayout(layout){
+      currentLayout=layout;
+      layoutBtns.forEach(b=>b.classList.toggle('active',b.dataset.layout===layout));
+      calWrap.style.display=layout==='calendar'?'flex':'none';
+      kanbanWrap.style.display=layout==='kanban'?'flex':'none';
+      appRpanel.style.display=layout==='kanban'?'flex':'none';
+      appMain.style.borderRadius=layout==='calendar'?'0 var(--r-xl) var(--r-xl) 0':'0';
+    }
+
+    function setActiveNav(nav){
+      $$('.nav-item').forEach(n=>n.classList.toggle('active',n.dataset.nav===nav));
+    }
+
+    function setTheme(mode){
+      app.setAttribute('data-theme',mode);
+    }
+
+    function showView(view){
+      // hide all content views, then show requested one
+      calWrap.style.display='none';
+      kanbanWrap.style.display='none';
+      themeWrap.style.display='none';
+      tasksWrap.style.display='none';
+      appRpanel.style.display='none';
+      if(view==='calendar'){ calWrap.style.display='flex'; appMain.style.borderRadius='0 var(--r-xl) var(--r-xl) 0'; }
+      if(view==='kanban'){ kanbanWrap.style.display='flex'; appRpanel.style.display='flex'; appMain.style.borderRadius='0'; }
+      if(view==='theme'){ themeWrap.style.display='block'; }
+      if(view==='tasks'){ tasksWrap.style.display='block'; }
+    }
+
+    // ==================== HIGHLIGHT / CALLOUT ====================
+    function highlight(sel){ const el=$(sel); if(el) el.classList.add('hl'); }
+    function unhighlight(sel){ const el=$(sel); if(el) el.classList.remove('hl'); }
+    function callout(sel,text,pos){
+      const el=$(sel); if(!el) return;
+      const r=el.getBoundingClientRect();
+      const wrapRect=$('.mock-wrap').getBoundingClientRect();
+      calloutEl.style.transition='none';
+      calloutEl.textContent=text;
+      calloutEl.className='callout rt';
+      const relX=r.left-wrapRect.left, relY=r.top-wrapRect.top;
+      if(pos==='top'){
+        calloutEl.className='callout bl';
+        calloutEl.style.left=(relX+r.width/2)+'px';
+        calloutEl.style.top=(relY-14)+'px';
+        calloutEl.style.transform='translate(-50%,-100%)';
+      }else if(pos==='left'){
+        calloutEl.className='callout lt';
+        calloutEl.style.left=(relX-20)+'px';
+        calloutEl.style.top=(relY+r.height/2)+'px';
+        calloutEl.style.transform='translate(-100%,-50%)';
+      }else{
+        calloutEl.style.left=(relX+r.width+20)+'px';
+        calloutEl.style.top=(relY+r.height/2)+'px';
+        calloutEl.style.transform='translate(0,-50%)';
+      }
+      calloutEl.style.transition='';
+      calloutEl.style.opacity='1';
+    }
+    function uncallout(sel){
+      calloutEl.style.opacity='0';
+    }
+
+    // ==================== AI PANEL ====================
+    function openAi(tab){
+      aiPanel.classList.add('open'); aiOvl.classList.add('show');
+      if(tab) switchAiTab(tab);
+    }
+    function closeAi(){
+      aiPanel.classList.remove('open'); aiOvl.classList.remove('show');
+    }
+    function switchAiTab(tab){
+      aiTabs.forEach(t=>t.classList.toggle('active',t.dataset.tab===tab));
+      const tabIds={chat:'tabChat',summary:'tabSummary',workflow:'tabWorkflow',settings:'tabSettings'};
+      Object.entries(tabIds).forEach(([k,v])=>{const el=document.getElementById(v);if(el)el.style.display=k===tab?'flex':'none';});
+    }
+    function showToast(msg){
+      toastEl.textContent=msg; toastEl.classList.add('show');
+      setTimeout(()=>toastEl.classList.remove('show'),2000);
+    }
+
+    // ==================== DEMO STEPS ====================
+    const calSteps=[
+      {delay:5000,desc:'快速日期跳转',fn(){
+        setLayout('calendar'); setActiveNav('calendar'); showView('calendar');
+        highlight('.month-nav h3'); callout('.month-nav h3','点击年月快速切换日期');
+      }},
+      {delay:5000,desc:'日历视图 - 创建任务',fn(){
+        unhighlight('.month-nav h3'); uncallout();
+        highlight('.cell.today'); callout('.cell.today','点击日历格子\n即可创建新任务');
+      }},
+      {delay:5000,desc:'任务列表管理',fn(){
+        unhighlight('.cell.today'); uncallout();
+        setActiveNav('tasks'); showView('tasks');
+        highlight('.task-item:nth-child(3)');
+        callout('.task-item:nth-child(3)','切换至任务列表\n按优先级查看与管理所有任务');
+      }},
+      {delay:5000,desc:'AI 智能解析自然语言',fn(){
+        unhighlight('.task-item'); uncallout();
+        setActiveNav('ai'); showView('calendar');
+        openAi('chat'); highlight('#aiChatInput');
+        setTimeout(()=>{
+          callout('#aiChatInput','输入自然语言\nAI 自动解析时间与事件','top');
+        },350);
+        setTimeout(()=>{
+          aiChatInput.value='明天下午3点开会讨论Q3规划';
+        },600);
+      }},
+      {delay:5000,desc:'AI 智能总结',fn(){
+        unhighlight('#aiChatInput'); uncallout(); aiChatInput.value='';
+        closeAi();
+        openAi('summary');
+        setTimeout(()=>{
+          highlight('#tabSummary select');
+          callout('#tabSummary','AI 自动生成\n每日 · 每周 · 每月工作总结','left');
+        },350);
+      }},
+      {delay:5000,desc:'多模型自由切换',fn(){
+        unhighlight('#tabSummary select'); uncallout();
+        closeAi();
+        switchAiTab('settings');
+        openAi('settings');
+        setTimeout(()=>{
+          aiProviders.forEach((p,i)=>{setTimeout(()=>p.classList.add('hl'),i*200);});
+          callout('#provGrid','支持 6 种大模型\nDeepSeek · OpenAI · GLM 等','left');
+        },500);
+      }},
+      {delay:5000,desc:'多种主题配色选择',fn(){
+        aiProviders.forEach(p=>p.classList.remove('hl'));
+        uncallout();
+        closeAi();
+        setActiveNav('theme'); showView('theme');
+        highlight('.color-swatch:first-child');
+        callout('.color-swatch:first-child','雾霾蓝 · 薰衣紫 · 薄荷绿\n多种主题配色自由选择');
+        setTimeout(()=>{
+          highlight('.color-swatch:nth-child(2)');
+          unhighlight('.color-swatch:first-child');
+          callout('.color-swatch:nth-child(2)','薰衣紫 · 优雅神秘\n5 种配色一键切换');
+        },1500);
+        setTimeout(()=>{ unhighlight('.color-swatch'); uncallout(); },3500);
+      }},
+      {delay:5000,desc:'深色 · 浅色模式切换',fn(){
+        unhighlight('.color-swatch'); uncallout();
+        closeAi();
+        setActiveNav('theme'); showView('theme');
+        setTheme('light');
+        $$('.mode-sw button').forEach(b=>b.classList.remove('active'));
+        $$('.mode-sw button')[0].classList.add('active');
+        highlight('.mode-sw button.active');
+        callout('.mode-sw','浅色模式 · 日间明亮\n当前默认配色');
+        setTimeout(()=>{
+          $$('.mode-sw button').forEach(b=>b.classList.remove('hl'));
+          uncallout();
+          setTheme('dark');
+          $$('.mode-sw button').forEach(b=>b.classList.toggle('active'));
+          callout('.mode-sw','深色模式 · 夜间护眼\n一键切换配色方案');
+          setTimeout(()=>{
+            uncallout();
+          },3000);
+        },3000);
+      }}
+    ];
+
+    const kbSteps=[
+      {delay:5000,desc:'看板视图 - 可视化工作流',fn(){
+        setLayout('kanban'); setActiveNav('calendar'); showView('kanban');
+        highlight('.kcol:first-child .kcard:first-child');
+        callout('.kcol:first-child .kcard:first-child','五列看板视图\n逾期 · 今天 · 明天 · 本周 · 以后');
+      }},
+      {delay:5000,desc:'任务概览统计',fn(){
+        unhighlight('.kcard'); uncallout();
+        setTimeout(()=>{
+          highlight('.tsum');
+          callout('.tsum','任务概览仪表盘\n全部·待处理·已完成·已逾期');
+        },200);
+      }},
+      {delay:5000,desc:'任务列表管理',fn(){
+        unhighlight('.tsum'); uncallout();
+        setActiveNav('tasks'); showView('tasks');
+        highlight('.task-item:nth-child(4)');
+        callout('.task-item:nth-child(4)','任务列表视图\n按状态筛选与批量管理');
+      }},
+      {delay:5000,desc:'AI 一键生成任务拆解',fn(){
+        unhighlight('.task-item'); uncallout();
+        setActiveNav('ai'); showView('kanban');
+        openAi('chat'); highlight('#aiChatInput');
+        setTimeout(()=>{
+          callout('#aiChatInput','AI 对话即可\n一键拆解复杂任务','top');
+        },350);
+        setTimeout(()=>{
+          aiChatInput.value='帮我把"重构用户模块"拆成子任务';
+        },600);
+      }},
+      {delay:5000,desc:'灵活的模型配置',fn(){
+        unhighlight('#aiChatInput'); uncallout(); aiChatInput.value='';
+        closeAi(); switchAiTab('settings');
+        openAi('settings');
+        setTimeout(()=>{
+          aiProviders.forEach((p,i)=>{setTimeout(()=>p.classList.add('hl'),i*200);});
+          callout('#provGrid','6 种模型自由切换\n支持本地 Ollama 离线运行','left');
+        },500);
+      }},
+      {delay:5000,desc:'多种主题配色选择',fn(){
+        aiProviders.forEach(p=>p.classList.remove('hl'));
+        uncallout();
+        closeAi();
+        setActiveNav('theme'); showView('theme');
+        highlight('.color-swatch:first-child');
+        callout('.color-swatch:first-child','雾霾蓝 · 薰衣紫 · 薄荷绿\n多种主题配色自由选择');
+        setTimeout(()=>{
+          highlight('.color-swatch:nth-child(2)');
+          unhighlight('.color-swatch:first-child');
+          callout('.color-swatch:nth-child(2)','薰衣紫 · 优雅神秘\n5 种配色一键切换');
+        },1500);
+        setTimeout(()=>{ unhighlight('.color-swatch'); uncallout(); },3500);
+      }},
+      {delay:5000,desc:'深色 · 浅色模式切换',fn(){
+        unhighlight('.color-swatch'); uncallout();
+        closeAi();
+        setActiveNav('theme'); showView('theme');
+        setTheme('light');
+        $$('.mode-sw button').forEach(b=>b.classList.remove('active'));
+        $$('.mode-sw button')[0].classList.add('active');
+        highlight('.mode-sw button.active');
+        callout('.mode-sw','浅色模式 · 日间明亮\n当前默认配色');
+        setTimeout(()=>{
+          $$('.mode-sw button').forEach(b=>b.classList.remove('hl'));
+          uncallout();
+          setTheme('dark');
+          $$('.mode-sw button').forEach(b=>b.classList.toggle('active'));
+          callout('.mode-sw','深色模式 · 夜间护眼\n一键切换配色方案');
+          setTimeout(()=>{
+            uncallout();
+          },3000);
+        },3000);
+      }}
+    ];
+
+    function updateStepDots(){
+      const steps=activeMode==='calendar'?calSteps:kbSteps;
+      const cur=activeMode==='calendar'?calStep:kbStep;
+      demoInfoText.textContent=steps[cur]?steps[cur].desc:'';
+    }
+
+    let demoLoopTimer=null; root.__demoTimers.loop = () => demoLoopTimer;
+
+    function startDemoLoop(){
+      resetDemo();
+      calStep=0; kbStep=0;
+      runModeStep();
+    }
+
+    function runModeStep(){
+      const steps=activeMode==='calendar'?calSteps:kbSteps;
+      const cur=activeMode==='calendar'?calStep:kbStep;
+      if(cur>=steps.length){
+        demoLoopTimer=setTimeout(()=>startDemoLoop(), 1500);
+        return;
+      }
+      const s=steps[cur]; try { s.fn(); } catch (e) { console.error("[demo] 步骤失败 #" + SCOPE, s.desc, e); } updateStepDots();
+      stepTimer=setTimeout(()=>{
+        if(activeMode==='calendar') calStep++; else kbStep++;
+        runModeStep();
+      },s.delay);
+    }
+
+    function resetDemo(){ try { return resetDemoInner(); } catch (e) { console.error("[demo] resetDemo 失败 #" + SCOPE, e); } }
+    function resetDemoInner(){
+      clearTimeout(stepTimer);
+      clearTimeout(demoLoopTimer);
+      calStep=0; kbStep=0;
+      unhighlight('.cell'); unhighlight('.kcard'); unhighlight('#aiChatInput'); unhighlight('.color-swatch'); unhighlight('.tool-btn'); unhighlight('.tsum'); unhighlight('.month-nav h3'); unhighlight('#tabSummary select'); unhighlight('.nav-item[data-nav="tasks"]'); unhighlight('.task-item'); $$('.mode-sw button').forEach(b=>b.classList.remove('hl'));
+      aiProviders.forEach(p=>p.classList.remove('hl'));
+      aiChatInput.value='';
+      closeAi(); setLayout(activeMode==='kanban'?'kanban':'calendar');
+      uncallout('.cell'); uncallout('.kcard'); uncallout('.mode-sw');
+      calloutEl.style.opacity='0';
+      setTheme('light'); $$('.mode-sw button').forEach(b=>b.classList.remove('active')); $$('.mode-sw button')[0].classList.add('active');
+      setActiveNav('calendar'); showView(activeMode==='kanban'?'kanban':'calendar');
+      updateStepDots();
+    }
+
+    // ==================== EVENT HANDLERS ====================
+    layoutBtns.forEach(b=>b.addEventListener('click',()=>{
+      setLayout(b.dataset.layout);
+      activeMode=b.dataset.layout;
+      resetDemo();
+      setTimeout(()=>runModeStep(),400);
+    }));
+
+    aiOvl.addEventListener('click',closeAi);
+
+    root.querySelector('#aiClose').addEventListener('click',closeAi);
+
+    aiTabs.forEach(t=>t.addEventListener('click',()=>switchAiTab(t.dataset.tab)));
+
+    aiProviders.forEach(p=>p.addEventListener('click',function(){
+      aiProviders.forEach(x=>x.classList.remove('sel'));
+      this.classList.add('sel');
+      showToast('模型已切换：'+this.textContent.trim());
+    }));
+
+    root.querySelectorAll('.nav-item[data-nav="ai"]').forEach(b=>{
+      b.addEventListener('click',()=>openAi('chat'));
+    });
+
+    // ==================== STARTUP ====================
+    setLayout('calendar'); setActiveNav('calendar'); showView('calendar');
+    updateStepDots(); setTheme('light'); $$('.mode-sw button').forEach(b=>b.classList.remove('active')); $$('.mode-sw button')[0].classList.add('active');
+    setTimeout(()=>{ try { startDemoLoop(); } catch (e) { console.error("[demo] startDemoLoop 失败 #" + SCOPE, e); } }, typeof START_DELAY==="number" ? START_DELAY : 1200);
+
+  })(SCOPE, root, START_DELAY);
+
+  return { root: root, timers: root.__demoTimers || {} };
+};
+})();
+</script>
+<!-- ══════════════ 动画模块结束 ══════════════ -->
+<!-- ══════════════ 动画模块结束 ══════════════ -->
+<!-- ══════════════ 动画模块结束 ══════════════ -->
+<!-- ══════════════ 动画模块结束 ══════════════ -->
+<!-- ══════════════ 动画模块结束 ══════════════ -->
+<!-- ══════════════ 动画模块结束 ══════════════ -->
+<!-- ══════════════ 动画模块结束 ══════════════ -->
+<!-- ══════════════ 动画模块结束 ══════════════ -->
+<!-- ══════════════ 动画模块结束 ══════════════ -->
+<!-- ══════════════ 动画模块结束 ══════════════ -->
+<!-- ══════════════ 动画模块结束 ══════════════ -->
+<!-- ══════════════ 动画模块结束 ══════════════ -->
+<!-- ══════════════ 动画模块结束 ══════════════ -->
+<!-- ══════════════ 动画模块结束 ══════════════ -->
+<!-- ══════════════ 动画模块结束 ══════════════ -->
+<!-- ══════════════ 动画模块结束 ══════════════ -->
+<!-- ══════════════ 动画模块结束 ══════════════ -->
+<!-- ══════════════ 动画模块结束 ══════════════ -->
+<!-- ══════════════ 动画模块结束 ══════════════ -->
+<!-- ══════════════ 动画模块结束 ══════════════ -->
+<!-- ══════════════ 动画模块结束 ══════════════ -->
+<!-- ══════════════ 动画模块结束 ══════════════ -->
+<!-- ══════════════ 动画模块结束 ══════════════ -->
+<!-- ══════════════ 动画模块结束 ══════════════ -->
+<!-- ══════════════ 动画模块结束 ══════════════ -->
+<!-- ══════════════ 动画模块结束 ══════════════ -->
+<!-- ══════════════ 动画模块结束 ══════════════ -->
+<!-- ══════════════ 动画模块结束 ══════════════ -->
+<!-- ══════════════ 动画模块结束 ══════════════ -->
+<!-- ══════════════ 动画模块结束 ══════════════ -->
+<!-- ══════════════ 动画模块结束 ══════════════ -->
+<!-- ══════════════ 动画模块结束 ══════════════ -->
+<!-- ══════════════ 动画模块结束 ══════════════ -->
+<!-- ══════════════ 动画模块结束 ══════════════ -->
+<!-- ══════════════ 动画模块结束 ══════════════ -->
+<!-- ══════════════ 动画模块结束 ══════════════ -->
+<!-- ══════════════ 动画模块结束 ══════════════ -->
+<!-- ══════════════ 动画模块结束 ══════════════ -->
+<!-- ══════════════ 动画模块结束 ══════════════ -->
+<!-- ══════════════ 动画模块结束 ══════════════ -->
+<!-- ══════════════ 动画模块结束 ══════════════ -->
+<!-- ══════════════ 动画模块结束 ══════════════ -->
+<!-- ══════════════ 动画模块结束 ══════════════ -->
+</body>
+</html>

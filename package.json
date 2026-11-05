@@ -1,0 +1,53 @@
+{
+  "name": "dsh-ai-calendar",
+  "version": "1.2.0",
+  "description": "把「AI 智能日历」嵌进 DeepSeek Harness：侧栏面板 + 可拖拽定时任务浮窗 + Agent 日历工具（查询 / 新增 / 修改 / 删除日志与任务），AI 直接走 Harness 已配置的 DeepSeek。",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "calendar",
+    "ai-calendar",
+    "reminder",
+    "task"
+  ],
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "rsc",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [],
+      "platform": "web"
+    }
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.11.1"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "author": "dengyinxi100-crypto",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dengyinxi100-crypto/dsh-ai-calendar.git"
+  },
+  "homepage": "https://github.com/dengyinxi100-crypto/dsh-ai-calendar#readme",
+  "bugs": {
+    "url": "https://github.com/dengyinxi100-crypto/dsh-ai-calendar/issues"
+  }
+}
