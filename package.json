@@ -1,6 +1,6 @@
 {
   "name": "dsh-ai-calendar",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "把「AI 智能日历」嵌进 DeepSeek Harness：侧栏面板 + 可拖拽定时任务浮窗 + Agent 日历工具（查询 / 新增 / 修改 / 删除日志与任务），AI 直接走 Harness 已配置的 DeepSeek。",
   "keywords": [
     "dsh",
