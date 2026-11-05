@@ -22,8 +22,7 @@
     "lib",
     "rsc",
     "cordis.patch.yml",
-    "README.md",
-    "LICENSE"
+    "README.md"
   ],
   "dsh": {
     "bundle": {
@@ -41,7 +40,7 @@
     "node": ">=20"
   },
   "author": "dengyinxi100-crypto",
-  "license": "MIT",
+  "license": "UNLICENSED",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/dengyinxi100-crypto/ai-calendar-deepseek-harness.git"
