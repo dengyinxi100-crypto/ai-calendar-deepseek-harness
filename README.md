@@ -89,6 +89,7 @@ pnpm add dsh-ai-calendar
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
 | `DSH_CALENDAR_ROOT` / `DSH_CALENDAR_APP_ROOT` | 包内 `rsc/` | 覆盖日历前端与后端所在目录（开发时指向源码项目） |
+| `DSH_CALENDAR_DB` | 后端脚本旁的 `calendar.db` | 数据库文件路径（升级前建议指向固定目录） |
 | `DSH_CALENDAR_PORT` | `3001` | 后端端口 |
 | `DSH_CALENDAR_AI_MODEL` | 跟随 Harness 路由 | 强制指定模型名 |
 | `DSH_CALENDAR_PRICE_INPUT_PER_M` | `2` | 输入单价（元 / 百万 token），仅用于估算显示 |
@@ -96,9 +97,12 @@ pnpm add dsh-ai-calendar
 
 ## 数据
 
-- 日历数据存在后端 SQLite，默认在 `%APPDATA%` 下的应用数据目录
+- 日历数据存在后端 SQLite。默认位置是**后端脚本同目录**的 `calendar.db`（发布包内即 `rsc/server/calendar.db`），可用 `DSH_CALENDAR_DB` 指向别处
+- 后端 bundle 里写的是 `DB_PATH || <后端脚本目录>/calendar.db`，所以插件会显式把 `DB_PATH` 传给后端——否则一旦后端脚本被搬到别处（比如打包进插件包），就会凭空生成一个空库，看起来像数据被清空
 - Harness 侧的用量账本存在浏览器 `localStorage`（`dsh_ai_calendar_usage_v1`），按天累计、保留 30 天
-- 诊断日志：`%TEMP%/dsh-ai-calendar/diag.log`
+- 诊断日志：`%TEMP%/dsh-ai-calendar/diag.log`，其中 `backend:db-path` 事件记录实际使用的数据库路径
+
+> 升级或重装插件前，建议备份 `calendar.db`（连同 `-wal` / `-shm` 一起复制），或把 `DSH_CALENDAR_DB` 指向固定目录。
 
 ---
 

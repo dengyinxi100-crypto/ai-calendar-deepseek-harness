@@ -5,3 +5,7 @@ scripts/
 *.log
 .DS_Store
 Thumbs.db
+# 日历数据文件：绝不入库
+rsc/server/calendar.db
+rsc/server/calendar.db-wal
+rsc/server/calendar.db-shm
