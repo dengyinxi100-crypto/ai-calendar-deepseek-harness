@@ -144,6 +144,3 @@ node scripts/package-plugin.mjs   # 仅仓库内开发者可用
 
 仓库里只有可发布的运行时文件；要重新构建内嵌资源，请用本地的 `package-plugin.mjs`，或用 `DSH_CALENDAR_ROOT` 指向源码项目。
 
-## 许可
-
-MIT
