@@ -44,10 +44,10 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/dengyinxi100-crypto/dsh-ai-calendar.git"
+    "url": "git+https://github.com/dengyinxi100-crypto/ai-calendar-deepseek-harness.git"
   },
-  "homepage": "https://github.com/dengyinxi100-crypto/dsh-ai-calendar#readme",
+  "homepage": "https://github.com/dengyinxi100-crypto/ai-calendar-deepseek-harness#readme",
   "bugs": {
-    "url": "https://github.com/dengyinxi100-crypto/dsh-ai-calendar/issues"
+    "url": "https://github.com/dengyinxi100-crypto/ai-calendar-deepseek-harness/issues"
   }
 }
